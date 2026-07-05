@@ -128,7 +128,7 @@ async function viewBatches() {
         <h4>${escapeHtml(b.name)}</h4>
         <p>القالب: ${escapeHtml(b.template_name || "بدون")}</p>
         <div class="meta">
-          <span>${b.model === "nano_banana" ? "Nano Banana" : "GPT-Image"}</span> ·
+          <span>${modelLabel(b.model)}</span> ·
           <span>${b.done}/${b.total} جاهزة</span>
           <span class="badge ${b.status === "done" ? "done" : "running"}"><span class="dot"></span>${statusLabel(b.status)}</span>
         </div>
@@ -161,14 +161,22 @@ function viewNewBatch() {
 }
 
 // أداة مساعدة: أزرار اختيار الموديل
+const MODELS = {
+  gpt_image: "GPT-Image",
+  nano_banana: "Nano Banana",
+  nano_banana_pro: "Nano Banana Pro",
+};
+function modelLabel(m) { return MODELS[m] || m; }
+
 function modelPills(id) {
-  return `<div class="pill-choice" id="${id}">
-      <div class="pill active" data-model="nano_banana">${icon("zap")}<span>Nano Banana</span></div>
-      <div class="pill" data-model="gpt_image">${icon("cpu")}<span>GPT-Image</span></div>
+  return `<div class="pill-choice wrap" id="${id}">
+      <div class="pill active" data-model="gpt_image">${icon("cpu")}<span>GPT-Image</span></div>
+      <div class="pill" data-model="nano_banana">${icon("zap")}<span>Nano Banana</span></div>
+      <div class="pill" data-model="nano_banana_pro">${icon("zap")}<span>Nano Banana Pro</span></div>
     </div>`;
 }
 function wireModelPills(id, stateObj) {
-  stateObj.model = "nano_banana";
+  stateObj.model = "gpt_image";
   document.querySelectorAll(`#${id} .pill`).forEach((p) => {
     p.addEventListener("click", () => {
       document.querySelectorAll(`#${id} .pill`).forEach((x) => x.classList.remove("active"));
@@ -468,7 +476,7 @@ async function renderBatch() {
       <div>
         <div class="page-title" style="margin-bottom:2px">${escapeHtml(b.name)}</div>
         <div class="page-sub" style="margin-bottom:0">القالب: ${escapeHtml(b.template_name || "بدون")} ·
-          ${b.model === "nano_banana" ? "Nano Banana" : "GPT-Image"}</div>
+          ${modelLabel(b.model)}</div>
       </div>
       <div class="row" style="flex:0">
         <button class="btn ghost" onclick="navigate('batches')">${icon("arrowRight")}<span>رجوع</span></button>

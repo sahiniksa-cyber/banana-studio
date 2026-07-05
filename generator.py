@@ -17,8 +17,12 @@ from PIL import Image, ImageFilter, ImageDraw
 _log = logging.getLogger(__name__)
 
 # معرّفات الموديلات
-NANO_BANANA_MODEL = "gemini-2.5-flash-image"
 GPT_IMAGE_MODEL = "gpt-image-1"
+# خرائط موديلات Gemini (الاسم الودّي → معرّف الـ API)
+GEMINI_MODELS = {
+    "nano_banana": "gemini-2.5-flash-image",       # Nano Banana
+    "nano_banana_pro": "gemini-3-pro-image",        # Nano Banana Pro (أحدث وأقوى)
+}
 
 _TIMEOUT = 300
 
@@ -48,8 +52,9 @@ def generate(model, api_key, prompt, input_path, reference_path=None, aspect=Non
     """يوزّع على الموديل المطلوب ويرجّع bytes للصورة الناتجة."""
     if not api_key:
         raise GenerationError(NO_KEY_MSG)
-    if model == "nano_banana":
-        return _generate_gemini(api_key, prompt, input_path, reference_path, aspect)
+    if model in GEMINI_MODELS:
+        return _generate_gemini(api_key, prompt, input_path, reference_path, aspect,
+                                GEMINI_MODELS[model])
     if model == "gpt_image":
         return _generate_openai(api_key, prompt, input_path, reference_path, aspect, quality)
     raise GenerationError(f"موديل غير معروف: {model}")
@@ -86,7 +91,10 @@ def lock_subject(original_path, generated_bytes):
         if gen.size != orig.size:
             gen = gen.resize(orig.size)
         alpha = _foreground_alpha(original_path).resize(orig.size)
-        alpha = alpha.filter(ImageFilter.GaussianBlur(1.5))  # تنعيم الحواف
+        # قناع أكثر شمولًا لضمان تغطية كامل المنتج (نرفع القيم المتوسطة ونوسّع قليلًا)
+        alpha = alpha.point(lambda v: 255 if v > 30 else int(min(255, v * 5)))
+        alpha = alpha.filter(ImageFilter.MaxFilter(5))       # توسيع (dilate) ~2px
+        alpha = alpha.filter(ImageFilter.GaussianBlur(1.2))  # تنعيم الحواف
         out = Image.composite(orig, gen, alpha)  # المنتج من الأصل، الباقي من الذكاء
         return _to_png_bytes(out)
     except Exception as e:  # noqa: BLE001
@@ -142,10 +150,11 @@ def _foreground_alpha(path):
 
 
 # ---------- Nano Banana (Gemini) ----------
-def _generate_gemini(api_key, prompt, input_path, reference_path, aspect=None):
+def _generate_gemini(api_key, prompt, input_path, reference_path, aspect=None,
+                     model_id="gemini-2.5-flash-image"):
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{NANO_BANANA_MODEL}:generateContent"
+        f"{model_id}:generateContent"
     )
     parts = [{"text": prompt}]
     # الصورة المدخلة (المنتج) أولاً = الأساس المطلوب الحفاظ عليه،

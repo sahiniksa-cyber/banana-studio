@@ -217,9 +217,13 @@ def api_create_batch():
     return jsonify({"id": bid})
 
 
+def _is_gpt(model):
+    return model == "gpt_image"
+
+
 def _env_key(model):
     """مفتاح من متغيّرات بيئة Railway (له الأولوية، لا يُحفظ في ملفات المنصة)."""
-    if model == "nano_banana":
+    if not _is_gpt(model):  # أي موديل Gemini (Nano Banana / Pro)
         return (os.environ.get("NANO_BANANA_KEY")
                 or os.environ.get("GEMINI_API_KEY")
                 or os.environ.get("GOOGLE_API_KEY") or "").strip()
@@ -230,7 +234,7 @@ def _env_key(model):
 def _model_key(model):
     # الأولوية لمتغيّر البيئة (Railway)، ثم ما هو محفوظ محليًا (إن وُجد)
     return _env_key(model) or store.get_setting(
-        "nano_banana_key" if model == "nano_banana" else "gpt_image_key"
+        "gpt_image_key" if _is_gpt(model) else "nano_banana_key"
     )
 
 
