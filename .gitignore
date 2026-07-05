@@ -1,0 +1,17 @@
+# بيانات التشغيل — لا تُرفع أبدًا (تحتوي مفاتيح API والصور وقاعدة البيانات)
+data/
+!data/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# بيئة
+.env
+
+# نظام التشغيل
+Thumbs.db
+.DS_Store

@@ -1,0 +1,343 @@
+"""منصّة توليد الصور بقالب موحّد — الخادم الرئيسي (Flask)."""
+import os
+import threading
+import time
+import uuid
+import zipfile
+import io
+from pathlib import Path
+
+from flask import (
+    Flask,
+    render_template,
+    request,
+    jsonify,
+    send_file,
+    abort,
+)
+from werkzeug.utils import secure_filename
+
+import store
+import generator
+
+BASE_DIR = Path(__file__).parent
+DATA_DIR = Path(os.environ.get("DATA_DIR", BASE_DIR / "data"))
+UPLOAD_DIR = DATA_DIR / "uploads"       # الصور المدخلة + المراجع
+RESULT_DIR = DATA_DIR / "results"       # الصور الناتجة
+DB_FILE = DATA_DIR / "studio.db"
+
+for d in (DATA_DIR, UPLOAD_DIR, RESULT_DIR):
+    d.mkdir(parents=True, exist_ok=True)
+
+store.init_db(DB_FILE)
+
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200MB للدفعة
+
+ALLOWED = {"png", "jpg", "jpeg", "webp"}
+
+# تعليمة الثبات التام (الوضع "ب"): يطابق المرجع حرفيًا بدون برومبت من المستخدم.
+STRICT_INSTRUCTION = (
+    "أعد إنشاء الصورة المدخلة بحيث تطابق تمامًا أسلوب وتكوين وإضاءة وخلفية "
+    "وألوان ومزاج الصورة المرجعية، مع الحفاظ الكامل على هوية ومحتوى المنتج "
+    "الموجود في الصورة المدخلة. التزم بالقالب المرجعي حرفيًا ولا تغيّر الطابع "
+    "البصري إطلاقًا."
+)
+
+
+def _allowed(fn):
+    return "." in fn and fn.rsplit(".", 1)[1].lower() in ALLOWED
+
+
+def _save_upload(file_storage):
+    ext = file_storage.filename.rsplit(".", 1)[1].lower()
+    name = f"{uuid.uuid4().hex}.{ext}"
+    file_storage.save(UPLOAD_DIR / name)
+    return name
+
+
+# ============ الصفحة الرئيسية ============
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+# ============ الإعدادات (مفاتيح API) ============
+def is_demo():
+    # وضع التجربة مفعّل افتراضيًا حتى تُضاف المفاتيح
+    return store.get_setting("demo_mode", "1") == "1"
+
+
+@app.route("/api/settings", methods=["GET"])
+def get_settings():
+    return jsonify(
+        {
+            "nano_banana_key_set": bool(store.get_setting("nano_banana_key")),
+            "gpt_image_key_set": bool(store.get_setting("gpt_image_key")),
+            "demo_mode": is_demo(),
+        }
+    )
+
+
+@app.route("/api/settings", methods=["POST"])
+def save_settings():
+    data = request.get_json(force=True)
+    key_added = False
+    if data.get("nano_banana_key"):
+        store.set_setting("nano_banana_key", data["nano_banana_key"].strip())
+        key_added = True
+    if data.get("gpt_image_key"):
+        store.set_setting("gpt_image_key", data["gpt_image_key"].strip())
+        key_added = True
+    # عند إضافة مفتاح نطفّي وضع التجربة تلقائيًا ليعمل التوليد الحقيقي فورًا
+    if key_added:
+        store.set_setting("demo_mode", "0")
+    elif "demo_mode" in data:
+        store.set_setting("demo_mode", "1" if data["demo_mode"] else "0")
+    return jsonify({"ok": True, "demo_mode": is_demo()})
+
+
+# ============ القوالب ============
+@app.route("/api/templates", methods=["GET"])
+def api_list_templates():
+    return jsonify(store.list_templates())
+
+
+@app.route("/api/templates", methods=["POST"])
+def api_create_template():
+    name = request.form.get("name", "").strip()
+    prompt = request.form.get("prompt", "").strip()
+    if not name or not prompt:
+        return jsonify({"error": "الاسم والبرومبت مطلوبان"}), 400
+    reference = None
+    if "reference" in request.files and request.files["reference"].filename:
+        f = request.files["reference"]
+        if not _allowed(f.filename):
+            return jsonify({"error": "صيغة صورة غير مدعومة"}), 400
+        reference = _save_upload(f)
+    tid = store.create_template(name, reference, prompt)
+    return jsonify(store.get_template(tid))
+
+
+@app.route("/api/templates/<int:tid>", methods=["DELETE"])
+def api_delete_template(tid):
+    store.delete_template(tid)
+    return jsonify({"ok": True})
+
+
+# ============ الدفعات ============
+@app.route("/api/batches", methods=["GET"])
+def api_list_batches():
+    return jsonify(store.list_batches())
+
+
+@app.route("/api/batches", methods=["POST"])
+def api_create_batch():
+    name = request.form.get("name", "").strip() or time.strftime("دفعة %Y-%m-%d %H:%M")
+    model = request.form.get("model", "nano_banana")
+    strict = request.form.get("strict") == "1"
+    template_id = request.form.get("template_id")
+    template_id = int(template_id) if template_id else None
+    prompt = request.form.get("prompt", "").strip() or None
+    aspect = request.form.get("aspect") or None
+    quality = request.form.get("quality") or None
+
+    # المرجع: إمّا ملف مرفوع، أو اسم ملف محفوظ مسبقًا (من جلسة تصميم الوضع "أ")
+    reference = None
+    if "reference" in request.files and request.files["reference"].filename:
+        f = request.files["reference"]
+        if not _allowed(f.filename):
+            return jsonify({"error": "صيغة الصورة المرجعية غير مدعومة"}), 400
+        reference = _save_upload(f)
+    elif request.form.get("reference_name"):
+        reference = secure_filename(request.form["reference_name"])
+
+    files = request.files.getlist("images")
+    files = [f for f in files if f.filename and _allowed(f.filename)]
+    if not files:
+        return jsonify({"error": "ارفع صورة واحدة على الأقل"}), 400
+
+    bid = store.create_batch(
+        name, template_id, model, reference=reference, prompt=prompt, strict=strict,
+        aspect=aspect, quality=quality
+    )
+    for f in files:
+        store.add_image(bid, _save_upload(f))
+
+    threading.Thread(target=_process_batch, args=(bid,), daemon=True).start()
+    return jsonify({"id": bid})
+
+
+def _model_key(model):
+    return store.get_setting("nano_banana_key" if model == "nano_banana" else "gpt_image_key")
+
+
+def _process_batch(bid):
+    batch = store.get_batch(bid)
+    if not batch:
+        return
+    store.set_batch_status(bid, "running")
+    api_key = _model_key(batch["model"])
+    if batch.get("strict"):
+        prompt = STRICT_INSTRUCTION
+    else:
+        prompt = batch.get("prompt") or "طبّق نفس أسلوب الصورة المرجعية على هذه الصورة."
+    reference = UPLOAD_DIR / batch["reference"] if batch.get("reference") else None
+    demo = is_demo()
+
+    for img in store.list_images(bid):
+        store.update_image(img["id"], status="running")
+        try:
+            out = generator.generate(
+                batch["model"],
+                api_key,
+                prompt,
+                UPLOAD_DIR / img["original"],
+                reference,
+                demo=demo,
+                aspect=batch.get("aspect"),
+                quality=batch.get("quality"),
+            )
+            result_name = f"{uuid.uuid4().hex}.png"
+            (RESULT_DIR / result_name).write_bytes(out)
+            store.update_image(img["id"], status="done", result=result_name, error=None)
+        except Exception as e:  # noqa: BLE001
+            store.update_image(img["id"], status="failed", error=str(e)[:400])
+
+    store.set_batch_status(bid, "done")
+
+
+@app.route("/api/batches/<int:bid>")
+def api_get_batch(bid):
+    batch = store.get_batch(bid)
+    if not batch:
+        abort(404)
+    batch["images"] = store.list_images(bid)
+    return jsonify(batch)
+
+
+@app.route("/api/batches/<int:bid>", methods=["DELETE"])
+def api_delete_batch(bid):
+    store.delete_batch(bid)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/batches/<int:bid>/download")
+def api_download_batch(bid):
+    images = store.list_images(bid)
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as zf:
+        for i, img in enumerate(images, 1):
+            if img["result"]:
+                zf.write(RESULT_DIR / img["result"], f"{i:03d}.png")
+    mem.seek(0)
+    return send_file(mem, mimetype="application/zip", as_attachment=True,
+                     download_name=f"batch_{bid}.zip")
+
+
+# ============ الوضع "أ": تصميم قالب من صورة واحدة (توليد + تعديل قبل الاعتماد) ============
+@app.route("/api/design", methods=["POST"])
+def api_design():
+    """يولّد تصميمًا واحدًا من عيّنة + برومبت. أول مرة: رفع العيّنة.
+    التكرار: إرسال sample_name للعيّنة المحفوظة مع برومبت جديد."""
+    model = request.form.get("model", "nano_banana")
+    prompt = request.form.get("prompt", "").strip()
+    aspect = request.form.get("aspect") or None
+    quality = request.form.get("quality") or None
+    if not prompt:
+        return jsonify({"error": "اكتب برومبت التصميم"}), 400
+
+    # العيّنة: ملف جديد أو اسم عيّنة محفوظة
+    if "sample" in request.files and request.files["sample"].filename:
+        f = request.files["sample"]
+        if not _allowed(f.filename):
+            return jsonify({"error": "صيغة صورة غير مدعومة"}), 400
+        sample_name = _save_upload(f)
+    elif request.form.get("sample_name"):
+        sample_name = secure_filename(request.form["sample_name"])
+    else:
+        return jsonify({"error": "ارفع صورة العيّنة"}), 400
+
+    api_key = _model_key(model)
+    try:
+        out = generator.generate(model, api_key, prompt, UPLOAD_DIR / sample_name, None,
+                                 demo=is_demo(), aspect=aspect, quality=quality)
+        result_name = f"{uuid.uuid4().hex}.png"
+        (RESULT_DIR / result_name).write_bytes(out)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": str(e)[:400]}), 400
+
+    return jsonify(
+        {"sample_name": sample_name, "result_name": result_name, "prompt": prompt}
+    )
+
+
+# ============ تعديل صورة مفردة (إعادة توليد ببرومبت مخصص) ============
+@app.route("/api/images/<int:iid>/regenerate", methods=["POST"])
+def api_regenerate(iid):
+    img = store.get_image(iid)
+    if not img:
+        abort(404)
+    batch = store.get_batch(img["batch_id"])
+
+    # يقبل multipart (مع قناع منطقة) أو JSON (برومبت فقط)
+    mask_file = None
+    if request.content_type and "multipart" in request.content_type:
+        custom_prompt = (request.form.get("prompt") or "").strip()
+        mask_file = request.files.get("mask")
+    else:
+        data = request.get_json(force=True)
+        custom_prompt = (data.get("prompt") or "").strip()
+
+    if batch.get("strict"):
+        prompt = custom_prompt or STRICT_INSTRUCTION
+    else:
+        prompt = custom_prompt or batch.get("prompt") or "حسّن هذه الصورة."
+    api_key = _model_key(batch["model"])
+    reference = UPLOAD_DIR / batch["reference"] if batch.get("reference") else None
+    demo = is_demo()
+
+    store.update_image(iid, status="running", custom_prompt=custom_prompt or None)
+    try:
+        if mask_file and mask_file.filename:
+            # تعديل منطقة محددة: يُدمج الجديد داخل القناع فوق النتيجة الحالية
+            mask_name = f"mask_{uuid.uuid4().hex}.png"
+            mask_file.save(UPLOAD_DIR / mask_name)
+            base = RESULT_DIR / img["result"] if img.get("result") else UPLOAD_DIR / img["original"]
+            out = generator.generate_region(
+                batch["model"], api_key, prompt,
+                UPLOAD_DIR / img["original"], reference,
+                UPLOAD_DIR / mask_name, base, demo=demo,
+                aspect=batch.get("aspect"), quality=batch.get("quality"),
+            )
+        else:
+            out = generator.generate(
+                batch["model"], api_key, prompt,
+                UPLOAD_DIR / img["original"], reference, demo=demo,
+                aspect=batch.get("aspect"), quality=batch.get("quality"),
+            )
+        result_name = f"{uuid.uuid4().hex}.png"
+        (RESULT_DIR / result_name).write_bytes(out)
+        store.update_image(iid, status="done", result=result_name, error=None)
+    except Exception as e:  # noqa: BLE001
+        store.update_image(iid, status="failed", error=str(e)[:400])
+    return jsonify(store.get_image(iid))
+
+
+# ============ خدمة ملفات الصور ============
+@app.route("/media/upload/<name>")
+def media_upload(name):
+    return send_file(UPLOAD_DIR / secure_filename(name))
+
+
+@app.route("/media/result/<name>")
+def media_result(name):
+    return send_file(RESULT_DIR / secure_filename(name))
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5001))
+    # 127.0.0.1 محليًا، و0.0.0.0 عند الاستضافة (عبر ضبط HOST)
+    host = os.environ.get("HOST", "127.0.0.1")
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(host=host, port=port, debug=debug)
