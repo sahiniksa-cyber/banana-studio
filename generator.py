@@ -94,26 +94,51 @@ def lock_subject(original_path, generated_bytes):
         raise GenerationError(f"تعذّر قفل شكل المنتج (عزل الخلفية): {e}") from e
 
 
-def rembg_selftest():
-    """فحص أن أداة العزل تعمل فعليًا (تُستخدم في /api/health)."""
-    img = Image.new("RGB", (64, 64), (240, 240, 240))
-    ImageDraw.Draw(img).ellipse([16, 16, 48, 48], fill=(200, 40, 40))
-    buf = io.BytesIO(); img.save(buf, "PNG")
-    out = lock_subject_from_image(img, buf.getvalue())
-    return out is not None
+def seg_selftest():
+    """فحص أن عزل المنتج يعمل فعليًا (يُستخدم في /api/health)."""
+    img = Image.new("RGB", (96, 96), (240, 240, 240))
+    ImageDraw.Draw(img).ellipse([24, 24, 72, 72], fill=(200, 40, 40))
+    mask = _alpha_from_pil(img)
+    arr = list(mask.getdata())
+    return max(arr) - min(arr) > 40  # القناع فيه تباين (عزل ناجح)
 
 
-def lock_subject_from_image(orig_img, generated_bytes):
-    gen = Image.open(io.BytesIO(generated_bytes)).convert("RGB")
-    from rembg import remove
-    alpha = remove(orig_img.convert("RGBA")).split()[3]
-    return _to_png_bytes(Image.composite(orig_img.convert("RGB"), gen, alpha))
+# ---------- عزل المنتج عبر onnxruntime (نموذج U2Net-p الخفيف 4.6MB) ----------
+import numpy as np  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+_MODEL_PATH = _Path(__file__).parent / "models" / "u2netp.onnx"
+_ORT_SESSION = None
+_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+
+def _get_session():
+    global _ORT_SESSION
+    if _ORT_SESSION is None:
+        import onnxruntime as ort  # استيراد كسول
+        _ORT_SESSION = ort.InferenceSession(
+            str(_MODEL_PATH), providers=["CPUExecutionProvider"]
+        )
+    return _ORT_SESSION
+
+
+def _alpha_from_pil(img):
+    """يُرجع قناع المنتج (L) بنفس أبعاد الصورة عبر U2Net-p."""
+    orig_size = img.size
+    small = img.convert("RGB").resize((320, 320), Image.LANCZOS)
+    arr = (np.array(small).astype(np.float32) / 255.0 - _MEAN) / _STD
+    arr = arr.transpose(2, 0, 1)[None, ...].astype(np.float32)
+    sess = _get_session()
+    pred = sess.run(None, {sess.get_inputs()[0].name: arr})[0][0, 0, :, :]
+    mi, ma = float(pred.min()), float(pred.max())
+    pred = (pred - mi) / (ma - mi + 1e-8)
+    mask = Image.fromarray((pred * 255).astype(np.uint8))
+    return mask.resize(orig_size, Image.LANCZOS)
 
 
 def _foreground_alpha(path):
-    from rembg import remove  # استيراد كسول (ثقيل)
-    cut = remove(Image.open(path).convert("RGBA"))
-    return cut.split()[3]  # قناة الشفافية = قناع المنتج
+    return _alpha_from_pil(Image.open(path).convert("RGB"))
 
 
 # ---------- Nano Banana (Gemini) ----------

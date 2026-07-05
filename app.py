@@ -33,9 +33,6 @@ DB_FILE = DATA_DIR / "studio.db"
 for d in (DATA_DIR, UPLOAD_DIR, RESULT_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-# مجلد نموذج عزل المنتج (rembg) على القرص الدائم حتى يُحمَّل مرة واحدة
-os.environ.setdefault("U2NET_HOME", str(DATA_DIR / ".u2net"))
-
 store.init_db(DB_FILE)
 
 app = Flask(__name__)
@@ -115,12 +112,12 @@ def health():
         "nano_banana_key_set": bool(store.get_setting("nano_banana_key")),
         "data_dir": str(DATA_DIR),
     }
-    if request.args.get("rembg") == "1":
+    if request.args.get("seg") == "1":
         try:
-            info["rembg_ok"] = bool(generator.rembg_selftest())
+            info["seg_ok"] = bool(generator.seg_selftest())
         except Exception as e:  # noqa: BLE001
-            info["rembg_ok"] = False
-            info["rembg_error"] = str(e)[:250]
+            info["seg_ok"] = False
+            info["seg_error"] = str(e)[:250]
     return jsonify(info)
 
 
