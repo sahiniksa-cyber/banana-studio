@@ -255,8 +255,8 @@ def _process_batch(bid):
                 aspect=batch.get("aspect"),
                 quality=batch.get("quality"),
             )
-            if batch.get("lock_subject"):
-                out = generator.lock_subject(UPLOAD_DIR / img["original"], out)
+            # قفل المنتج إجباري دائمًا: يستحيل أن يتغيّر شكل المنتج
+            out = generator.lock_subject(UPLOAD_DIR / img["original"], out)
             result_name = f"{uuid.uuid4().hex}.png"
             (RESULT_DIR / result_name).write_bytes(out)
             store.update_image(img["id"], status="done", result=result_name, error=None)
@@ -323,8 +323,8 @@ def api_design():
         eff = build_prompt(prompt, has_reference=False, strict=False)
         out = generator.generate(model, api_key, eff, UPLOAD_DIR / sample_name, None,
                                  aspect=aspect, quality=quality)
-        if lock:
-            out = generator.lock_subject(UPLOAD_DIR / sample_name, out)
+        # قفل المنتج إجباري دائمًا
+        out = generator.lock_subject(UPLOAD_DIR / sample_name, out)
         result_name = f"{uuid.uuid4().hex}.png"
         (RESULT_DIR / result_name).write_bytes(out)
     except Exception as e:  # noqa: BLE001
@@ -380,8 +380,8 @@ def api_regenerate(iid):
                 UPLOAD_DIR / img["original"], reference,
                 aspect=batch.get("aspect"), quality=batch.get("quality"),
             )
-            if batch.get("lock_subject"):
-                out = generator.lock_subject(UPLOAD_DIR / img["original"], out)
+            # قفل المنتج إجباري دائمًا (إلا عند تعديل منطقة محددة بالفرشاة)
+            out = generator.lock_subject(UPLOAD_DIR / img["original"], out)
         result_name = f"{uuid.uuid4().hex}.png"
         (RESULT_DIR / result_name).write_bytes(out)
         store.update_image(iid, status="done", result=result_name, error=None)
