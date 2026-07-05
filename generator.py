@@ -77,10 +77,11 @@ def _generate_gemini(api_key, prompt, input_path, reference_path, aspect=None):
         f"{NANO_BANANA_MODEL}:generateContent"
     )
     parts = [{"text": prompt}]
-    # الصورة المرجعية أولاً (الأسلوب) ثم الصورة المدخلة (المحتوى)
+    # الصورة المدخلة (المنتج) أولاً = الأساس المطلوب الحفاظ عليه،
+    # ثم الصورة المرجعية (الأسلوب) ثانيًا كمرجع فقط.
+    parts.append(_gemini_inline(input_path))
     if reference_path:
         parts.append(_gemini_inline(reference_path))
-    parts.append(_gemini_inline(input_path))
 
     body = {"contents": [{"parts": parts}]}
     if aspect:
@@ -124,8 +125,8 @@ def _generate_openai(api_key, prompt, input_path, reference_path, aspect=None, q
     files = []
     fhs = []
     try:
-        # gpt-image-1 يقبل عدة صور مدخلة عبر image[]
-        for p in ([reference_path] if reference_path else []) + [input_path]:
+        # الصورة المدخلة (المنتج) أولاً = الأساس، ثم المرجع (الأسلوب) ثانيًا
+        for p in [input_path] + ([reference_path] if reference_path else []):
             fh = open(p, "rb")
             fhs.append(fh)
             files.append(("image[]", (str(p).replace("\\", "/").split("/")[-1], fh, _guess_mime(p))))

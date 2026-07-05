@@ -40,13 +40,37 @@ app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200MB للدفعة
 
 ALLOWED = {"png", "jpg", "jpeg", "webp"}
 
-# تعليمة الثبات التام (الوضع "ب"): يطابق المرجع حرفيًا بدون برومبت من المستخدم.
-STRICT_INSTRUCTION = (
-    "أعد إنشاء الصورة المدخلة بحيث تطابق تمامًا أسلوب وتكوين وإضاءة وخلفية "
-    "وألوان ومزاج الصورة المرجعية، مع الحفاظ الكامل على هوية ومحتوى المنتج "
-    "الموجود في الصورة المدخلة. التزم بالقالب المرجعي حرفيًا ولا تغيّر الطابع "
-    "البصري إطلاقًا."
+# توضيح أدوار الصور للموديل: الصورة الأولى = المنتج المطلوب الحفاظ عليه،
+# الصورة الثانية (إن وُجدت) = مرجع للأسلوب فقط.
+_KEEP_CLAUSE = (
+    "الصورة الأولى هي المنتج المطلوب — أبقِ هذا المنتج كما هو تمامًا: نفس الشكل "
+    "والهوية والتفاصيل والنِّسب، ولا تستبدله بأي منتج آخر."
 )
+_REF_CLAUSE = (
+    " الصورة الثانية مرجع للأسلوب فقط (الخلفية، الإضاءة، الألوان، الطابع) — "
+    "استرشد بأسلوبها فقط ولا تنسخ المنتج أو العناصر منها."
+)
+
+# الوضع "ب" (ثبات تام، بدون برومبت): يطابق أسلوب المرجع مع الحفاظ على منتج المستخدم.
+STRICT_INSTRUCTION = (
+    _KEEP_CLAUSE
+    + " طابِق خلفية وإضاءة وألوان وطابع الصورة الثانية (المرجع) على منتج الصورة "
+    "الأولى، دون تغيير المنتج نفسه ودون نسخ منتج المرجع."
+)
+
+
+def build_prompt(user_prompt, has_reference, strict):
+    """يبني التعليمة النهائية للموديل مع توضيح أدوار الصور."""
+    if strict:
+        return STRICT_INSTRUCTION
+    base = user_prompt or "طبّق أسلوبًا احترافيًا نظيفًا."
+    if has_reference:
+        return f"{_KEEP_CLAUSE} طبّق التالي على منتج الصورة الأولى: {base}.{_REF_CLAUSE}"
+    # بدون مرجع (خطوة التصميم): صورة واحدة فقط
+    return (
+        "أبقِ المنتج/الموضوع الأساسي في الصورة كما هو تمامًا (شكله وهويته وتفاصيله)، "
+        f"وطبّق عليه التالي فقط: {base}."
+    )
 
 
 def _allowed(fn):
@@ -181,11 +205,8 @@ def _process_batch(bid):
         return
     store.set_batch_status(bid, "running")
     api_key = _model_key(batch["model"])
-    if batch.get("strict"):
-        prompt = STRICT_INSTRUCTION
-    else:
-        prompt = batch.get("prompt") or "طبّق نفس أسلوب الصورة المرجعية على هذه الصورة."
     reference = _ref_path(batch.get("reference"))
+    prompt = build_prompt(batch.get("prompt"), reference is not None, batch.get("strict"))
 
     for img in store.list_images(bid):
         store.update_image(img["id"], status="running")
@@ -261,13 +282,15 @@ def api_design():
 
     api_key = _model_key(model)
     try:
-        out = generator.generate(model, api_key, prompt, UPLOAD_DIR / sample_name, None,
+        eff = build_prompt(prompt, has_reference=False, strict=False)
+        out = generator.generate(model, api_key, eff, UPLOAD_DIR / sample_name, None,
                                  aspect=aspect, quality=quality)
         result_name = f"{uuid.uuid4().hex}.png"
         (RESULT_DIR / result_name).write_bytes(out)
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": str(e)[:400]}), 400
 
+    # نُرجع البرومبت الخام للمستخدم (يُغلَّف تلقائيًا عند التطبيق على الدفعة)
     return jsonify(
         {"sample_name": sample_name, "result_name": result_name, "prompt": prompt}
     )
@@ -290,12 +313,13 @@ def api_regenerate(iid):
         data = request.get_json(force=True)
         custom_prompt = (data.get("prompt") or "").strip()
 
-    if batch.get("strict"):
-        prompt = custom_prompt or STRICT_INSTRUCTION
-    else:
-        prompt = custom_prompt or batch.get("prompt") or "حسّن هذه الصورة."
     api_key = _model_key(batch["model"])
     reference = _ref_path(batch.get("reference"))
+    # برومبت مخصص من المستخدم يتقدّم؛ وإلا نستخدم برومبت الدفعة/الثبات
+    if custom_prompt:
+        prompt = build_prompt(custom_prompt, reference is not None, strict=False)
+    else:
+        prompt = build_prompt(batch.get("prompt"), reference is not None, batch.get("strict"))
 
     store.update_image(iid, status="running", custom_prompt=custom_prompt or None)
     try:
