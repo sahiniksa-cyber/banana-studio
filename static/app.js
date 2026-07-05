@@ -221,6 +221,13 @@ function qualityNote(id) {
   return `<div id="${id}" class="page-sub" style="margin-top:-8px;font-size:0.78rem">
     الجودة تؤثر في GPT-Image (وفي التكلفة). Nano Banana يولّد بأعلى جودة تلقائيًا.</div>`;
 }
+function lockToggle(id) {
+  return `<label class="check-row" style="margin:6px 0 16px">
+      <input type="checkbox" id="${id}" checked>
+      <span><b>قفل شكل المنتج</b> — يضمن عدم تغيّر منتجك إطلاقًا (يُعزل ويُلصق كما هو،
+      والذكاء يغيّر الخلفية/الأسلوب فقط). أوقفه فقط لو تبي الذكاء يعيد تصميم المنتج نفسه.</span>
+    </label>`;
+}
 
 // ===== الوضع "أ": استوديو تصميم القالب =====
 const design = {};
@@ -250,6 +257,8 @@ function viewDesignMode() {
           <label>الجودة</label>
           ${choicePills("d-quality", QUALITIES, "high")}
           ${qualityNote("d-qnote")}
+
+          ${lockToggle("d-lock")}
 
           <label>البرومبت</label>
           <textarea id="d-prompt" placeholder="صف الشكل/الأسلوب المطلوب…"></textarea>
@@ -302,6 +311,7 @@ async function designGenerate() {
   fd.append("prompt", prompt);
   fd.append("aspect", design.aspect);
   fd.append("quality", design.quality);
+  fd.append("lock", document.getElementById("d-lock").checked ? "1" : "0");
   if (sampleFile) fd.append("sample", sampleFile);
   else fd.append("sample_name", design.sampleName);
 
@@ -340,6 +350,7 @@ async function designRun() {
   fd.append("prompt", design.prompt);
   fd.append("aspect", design.aspect);
   fd.append("quality", design.quality);
+  fd.append("lock", document.getElementById("d-lock").checked ? "1" : "0");
   for (const f of files) fd.append("images", f);
 
   try {
@@ -390,6 +401,8 @@ async function viewReferenceMode() {
       ${choicePills("r-quality", QUALITIES, "high")}
       ${qualityNote("r-qnote")}
 
+      ${lockToggle("r-lock")}
+
       <label>صور المنتجات (20-50 صورة)</label>
       <div class="file-drop" id="r-drop">${icon("upload")}<span>اضغط لاختيار صور المنتجات</span></div>
       <input type="file" id="r-files" multiple accept="image/*" class="hidden">
@@ -429,6 +442,7 @@ async function refRun() {
   fd.append("model", refMode.model);
   fd.append("aspect", refMode.aspect);
   fd.append("quality", refMode.quality);
+  fd.append("lock", document.getElementById("r-lock").checked ? "1" : "0");
   fd.append("strict", "1"); // ثبات تام — الخادم يستخدم تعليمة صارمة بدون برومبت مستخدم
   if (tpl) fd.append("template_id", tpl);
   else if (refFile) fd.append("reference", refFile);

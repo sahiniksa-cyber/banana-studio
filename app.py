@@ -33,6 +33,9 @@ DB_FILE = DATA_DIR / "studio.db"
 for d in (DATA_DIR, UPLOAD_DIR, RESULT_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
+# مجلد نموذج عزل المنتج (rembg) على القرص الدائم حتى يُحمَّل مرة واحدة
+os.environ.setdefault("U2NET_HOME", str(DATA_DIR / ".u2net"))
+
 store.init_db(DB_FILE)
 
 app = Flask(__name__)
@@ -168,6 +171,7 @@ def api_create_batch():
     prompt = request.form.get("prompt", "").strip() or None
     aspect = request.form.get("aspect") or None
     quality = request.form.get("quality") or None
+    lock_subject = request.form.get("lock", "1") == "1"  # قفل المنتج (افتراضيًا مفعّل)
 
     # المرجع: إمّا ملف مرفوع، أو اسم ملف محفوظ مسبقًا (من جلسة تصميم الوضع "أ")
     reference = None
@@ -186,7 +190,7 @@ def api_create_batch():
 
     bid = store.create_batch(
         name, template_id, model, reference=reference, prompt=prompt, strict=strict,
-        aspect=aspect, quality=quality
+        aspect=aspect, quality=quality, lock_subject=lock_subject
     )
     for f in files:
         store.add_image(bid, _save_upload(f))
@@ -220,6 +224,8 @@ def _process_batch(bid):
                 aspect=batch.get("aspect"),
                 quality=batch.get("quality"),
             )
+            if batch.get("lock_subject"):
+                out = generator.lock_subject(UPLOAD_DIR / img["original"], out)
             result_name = f"{uuid.uuid4().hex}.png"
             (RESULT_DIR / result_name).write_bytes(out)
             store.update_image(img["id"], status="done", result=result_name, error=None)
@@ -266,6 +272,7 @@ def api_design():
     prompt = request.form.get("prompt", "").strip()
     aspect = request.form.get("aspect") or None
     quality = request.form.get("quality") or None
+    lock = request.form.get("lock", "1") == "1"
     if not prompt:
         return jsonify({"error": "اكتب برومبت التصميم"}), 400
 
@@ -285,6 +292,8 @@ def api_design():
         eff = build_prompt(prompt, has_reference=False, strict=False)
         out = generator.generate(model, api_key, eff, UPLOAD_DIR / sample_name, None,
                                  aspect=aspect, quality=quality)
+        if lock:
+            out = generator.lock_subject(UPLOAD_DIR / sample_name, out)
         result_name = f"{uuid.uuid4().hex}.png"
         (RESULT_DIR / result_name).write_bytes(out)
     except Exception as e:  # noqa: BLE001
@@ -340,6 +349,8 @@ def api_regenerate(iid):
                 UPLOAD_DIR / img["original"], reference,
                 aspect=batch.get("aspect"), quality=batch.get("quality"),
             )
+            if batch.get("lock_subject"):
+                out = generator.lock_subject(UPLOAD_DIR / img["original"], out)
         result_name = f"{uuid.uuid4().hex}.png"
         (RESULT_DIR / result_name).write_bytes(out)
         store.update_image(iid, status="done", result=result_name, error=None)

@@ -39,6 +39,7 @@ def init_db(db_path: Path):
             strict      INTEGER DEFAULT 0,    -- 1 = وضع الثبات التام (بدون برومبت مستخدم)
             aspect      TEXT,                 -- نسبة الأبعاد: 1:1 / 3:4 / 4:3 / 9:16 / 16:9
             quality     TEXT,                 -- الجودة: low / medium / high
+            lock_subject INTEGER DEFAULT 1,   -- 1 = قفل المنتج (لا يتغيّر شكله إطلاقًا)
             created_at  REAL NOT NULL,
             FOREIGN KEY (template_id) REFERENCES templates(id)
         );
@@ -74,6 +75,7 @@ def _migrate(conn):
             "strict": "INTEGER DEFAULT 0",
             "aspect": "TEXT",
             "quality": "TEXT",
+            "lock_subject": "INTEGER DEFAULT 1",
         },
     }
     for table, cols in wanted.items():
@@ -146,13 +148,13 @@ def delete_template(tid):
 
 # ---------- الدفعات ----------
 def create_batch(name, template_id, model, reference=None, prompt=None, strict=False,
-                 aspect=None, quality=None):
+                 aspect=None, quality=None, lock_subject=True):
     conn = _connect()
     cur = conn.execute(
         "INSERT INTO batches (name, template_id, model, status, reference, prompt, strict, "
-        "aspect, quality, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "aspect, quality, lock_subject, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (name, template_id, model, "pending", reference, prompt, 1 if strict else 0,
-         aspect, quality, time.time()),
+         aspect, quality, 1 if lock_subject else 0, time.time()),
     )
     conn.commit()
     bid = cur.lastrowid
@@ -194,7 +196,7 @@ def get_batch(bid):
     conn = _connect()
     row = conn.execute(
         "SELECT b.id, b.name, b.template_id, b.model, b.status, b.strict, b.created_at, "
-        "       b.aspect, b.quality, "
+        "       b.aspect, b.quality, b.lock_subject, "
         "       t.name AS template_name, "
         "       COALESCE(b.reference, t.reference) AS reference, "
         "       COALESCE(b.prompt, t.prompt)       AS prompt "

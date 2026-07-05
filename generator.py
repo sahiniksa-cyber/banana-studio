@@ -9,9 +9,12 @@
 """
 import base64
 import io
+import logging
 import mimetypes
 import requests
-from PIL import Image
+from PIL import Image, ImageFilter
+
+_log = logging.getLogger(__name__)
 
 # معرّفات الموديلات
 NANO_BANANA_MODEL = "gemini-2.5-flash-image"
@@ -68,6 +71,33 @@ def _to_png_bytes(im):
     buf = io.BytesIO()
     im.save(buf, "PNG")
     return buf.getvalue()
+
+
+# ---------- قفل المنتج (ضمان عدم تغيّر شكل المنتج في الكود) ----------
+def lock_subject(original_path, generated_bytes):
+    """يعزل المنتج من الصورة الأصلية ويلصقه فوق ناتج الذكاء.
+
+    النتيجة: بكسل المنتج = الأصل تمامًا (شكل مضمون)، والخلفية/الأسلوب من الذكاء.
+    عند أي فشل في العزل نُرجع ناتج الذكاء كما هو بدل إيقاف العملية.
+    """
+    try:
+        orig = Image.open(original_path).convert("RGB")
+        gen = Image.open(io.BytesIO(generated_bytes)).convert("RGB")
+        if gen.size != orig.size:
+            gen = gen.resize(orig.size)
+        alpha = _foreground_alpha(original_path).resize(orig.size)
+        alpha = alpha.filter(ImageFilter.GaussianBlur(1.5))  # تنعيم الحواف
+        out = Image.composite(orig, gen, alpha)  # المنتج من الأصل، الباقي من الذكاء
+        return _to_png_bytes(out)
+    except Exception as e:  # noqa: BLE001
+        _log.warning("lock_subject فشل العزل، سيُستخدم ناتج الذكاء: %s", e)
+        return generated_bytes
+
+
+def _foreground_alpha(path):
+    from rembg import remove  # استيراد كسول (ثقيل)
+    cut = remove(Image.open(path).convert("RGBA"))
+    return cut.split()[3]  # قناة الشفافية = قناع المنتج
 
 
 # ---------- Nano Banana (Gemini) ----------
