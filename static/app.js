@@ -71,16 +71,19 @@ function statusLabel(s) {
   return { queued: "بالانتظار", running: "يعالج…", done: "جاهزة", failed: "فشلت" }[s] || s;
 }
 
-// حالة وضع التجربة (يُحدّث عند الإقلاع وبعد حفظ الإعدادات)
-let DEMO_ON = false;
-async function refreshDemo() {
-  try { DEMO_ON = (await api("/api/settings")).demo_mode; } catch (e) {}
+// هل يوجد مفتاح API مضبوط؟ (يُحدّث عند الإقلاع وبعد حفظ الإعدادات)
+let HAS_KEY = false;
+async function refreshKeys() {
+  try {
+    const s = await api("/api/settings");
+    HAS_KEY = !!(s.gpt_image_key_set || s.nano_banana_key_set);
+  } catch (e) {}
 }
-function demoBanner() {
-  if (!DEMO_ON) return "";
+function noKeyBanner() {
+  if (HAS_KEY) return "";
   return `<div class="demo-banner">${icon("alert")}
-    <div><b>وضع التجربة مفعّل</b> — النتائج مجرد معاينة ملوّنة وليست توليدًا حقيقيًا.
-    أضف مفتاح API من <a onclick="navigate('settings')">الإعدادات</a> ليعمل التوليد الحقيقي (يُطفأ وضع التجربة تلقائيًا).</div></div>`;
+    <div><b>لا يوجد مفتاح API</b> — لن تتمكّن من إنشاء الصور حتى تضيف مفتاحًا.
+    افتح <a onclick="navigate('settings')">الإعدادات</a> وأدخل مفتاح GPT-Image أو Nano Banana.</div></div>`;
 }
 
 // ===== التنقّل =====
@@ -136,7 +139,7 @@ async function viewBatches() {
 // ===== شاشة: دفعة جديدة — اختيار الوضع =====
 function viewNewBatch() {
   main.innerHTML = `
-    ${demoBanner()}
+    ${noKeyBanner()}
     <div class="page-title">دفعة جديدة</div>
     <div class="page-sub">اختر طريقة العمل</div>
     <div class="mode-cards">
@@ -225,7 +228,7 @@ function viewDesignMode() {
   Object.assign(design, { model: "nano_banana", sampleName: null, resultName: null, prompt: "" });
   main.innerHTML = `
     <button class="back-link" onclick="viewNewBatch()">${icon("arrowRight")}<span>رجوع لاختيار الوضع</span></button>
-    ${demoBanner()}
+    ${noKeyBanner()}
     <div class="page-title">صمّم قالبًا جديدًا</div>
     <div class="page-sub">جرّب على صورة واحدة حتى تعتمد الشكل، بعدها طبّقه على كل المنتجات</div>
 
@@ -356,7 +359,7 @@ async function viewReferenceMode() {
   Object.assign(refMode, { model: "nano_banana" });
   main.innerHTML = `
     <button class="back-link" onclick="viewNewBatch()">${icon("arrowRight")}<span>رجوع لاختيار الوضع</span></button>
-    ${demoBanner()}
+    ${noKeyBanner()}
     <div class="page-title">قالب / صورة جاهزة</div>
     <div class="page-sub">المرجع يُطبَّق على كل المنتجات بثبات تام — لا توجد خانة برومبت</div>
 
@@ -740,14 +743,7 @@ async function viewSettings() {
   const s = await api("/api/settings");
   main.innerHTML = `
     <div class="page-title">الإعدادات</div>
-    <div class="page-sub">مفاتيح API الخاصة بك (تُحفظ محليًا في ملف دائم لا يُحذف)</div>
-    <div class="card">
-      <label class="check-row">
-        <input type="checkbox" id="s-demo" ${s.demo_mode ? "checked" : ""}>
-        <span><b>وضع التجربة</b> — يولّد صورًا محليًا بدون مفاتيح API (لتجربة المنصة كاملة).
-        يُطفأ تلقائيًا عند إضافة مفتاح حقيقي.</span>
-      </label>
-    </div>
+    <div class="page-sub">مفاتيح API الخاصة بك (تُحفظ في ملف دائم لا يُحذف)</div>
     <div class="card">
       <label>مفتاح Nano Banana (Google Gemini API)</label>
       <input type="password" id="s-nano" placeholder="${s.nano_banana_key_set ? "•••••••• (محفوظ)" : "AIza..."}">
@@ -763,20 +759,18 @@ async function viewSettings() {
 }
 
 async function saveSettings() {
-  const body = { demo_mode: document.getElementById("s-demo").checked };
+  const body = {};
   const nano = document.getElementById("s-nano").value.trim();
   const gpt = document.getElementById("s-gpt").value.trim();
   if (nano) body.nano_banana_key = nano;
   if (gpt) body.gpt_image_key = gpt;
-  const res = await api("/api/settings", {
+  await api("/api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  await refreshDemo();
-  if ((nano || gpt) && res.demo_mode === false)
-    toast("تم حفظ المفتاح وإيقاف وضع التجربة — التوليد الحقيقي مفعّل");
-  else toast("تم الحفظ");
+  await refreshKeys();
+  toast(HAS_KEY ? "تم حفظ المفتاح — التوليد الحقيقي جاهز" : "تم الحفظ");
   viewSettings();
 }
 
@@ -791,4 +785,4 @@ document.getElementById("overlay").addEventListener("click", (e) => {
 });
 
 // البداية
-refreshDemo().then(() => navigate("batches"));
+refreshKeys().then(() => navigate("batches"));

@@ -21,9 +21,13 @@ import store
 import generator
 
 BASE_DIR = Path(__file__).parent
-DATA_DIR = Path(os.environ.get("DATA_DIR", BASE_DIR / "data"))
-UPLOAD_DIR = DATA_DIR / "uploads"       # الصور المدخلة + المراجع
-RESULT_DIR = DATA_DIR / "results"       # الصور الناتجة
+# مجلد البيانات: يفضّل قرص Railway الدائم تلقائيًا، ثم DATA_DIR، ثم مجلد محلي.
+# يُحوّل دائمًا لمسار مطلق حتى لا يتأثر بمجلد التشغيل الحالي.
+_vol = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+_data_env = os.environ.get("DATA_DIR", "").strip()
+DATA_DIR = Path(_vol or _data_env or (BASE_DIR / "data")).resolve()
+UPLOAD_DIR = DATA_DIR / "uploads"       # الصور المدخلة + المراجع المرفوعة
+RESULT_DIR = DATA_DIR / "results"       # الصور الناتجة + مراجع التصميم المعتمدة
 DB_FILE = DATA_DIR / "studio.db"
 
 for d in (DATA_DIR, UPLOAD_DIR, RESULT_DIR):
@@ -56,6 +60,19 @@ def _save_upload(file_storage):
     return name
 
 
+def _ref_path(name):
+    """مسار المرجع: قد يكون صورة مرفوعة (uploads) أو تصميمًا معتمدًا (results)."""
+    if not name:
+        return None
+    up = UPLOAD_DIR / name
+    if up.exists():
+        return up
+    res = RESULT_DIR / name
+    if res.exists():
+        return res
+    return up  # احتياطي
+
+
 # ============ الصفحة الرئيسية ============
 @app.route("/")
 def index():
@@ -63,18 +80,12 @@ def index():
 
 
 # ============ الإعدادات (مفاتيح API) ============
-def is_demo():
-    # وضع التجربة مفعّل افتراضيًا حتى تُضاف المفاتيح
-    return store.get_setting("demo_mode", "1") == "1"
-
-
 @app.route("/api/settings", methods=["GET"])
 def get_settings():
     return jsonify(
         {
             "nano_banana_key_set": bool(store.get_setting("nano_banana_key")),
             "gpt_image_key_set": bool(store.get_setting("gpt_image_key")),
-            "demo_mode": is_demo(),
         }
     )
 
@@ -82,19 +93,11 @@ def get_settings():
 @app.route("/api/settings", methods=["POST"])
 def save_settings():
     data = request.get_json(force=True)
-    key_added = False
     if data.get("nano_banana_key"):
         store.set_setting("nano_banana_key", data["nano_banana_key"].strip())
-        key_added = True
     if data.get("gpt_image_key"):
         store.set_setting("gpt_image_key", data["gpt_image_key"].strip())
-        key_added = True
-    # عند إضافة مفتاح نطفّي وضع التجربة تلقائيًا ليعمل التوليد الحقيقي فورًا
-    if key_added:
-        store.set_setting("demo_mode", "0")
-    elif "demo_mode" in data:
-        store.set_setting("demo_mode", "1" if data["demo_mode"] else "0")
-    return jsonify({"ok": True, "demo_mode": is_demo()})
+    return jsonify({"ok": True})
 
 
 # ============ القوالب ============
@@ -182,8 +185,7 @@ def _process_batch(bid):
         prompt = STRICT_INSTRUCTION
     else:
         prompt = batch.get("prompt") or "طبّق نفس أسلوب الصورة المرجعية على هذه الصورة."
-    reference = UPLOAD_DIR / batch["reference"] if batch.get("reference") else None
-    demo = is_demo()
+    reference = _ref_path(batch.get("reference"))
 
     for img in store.list_images(bid):
         store.update_image(img["id"], status="running")
@@ -194,7 +196,6 @@ def _process_batch(bid):
                 prompt,
                 UPLOAD_DIR / img["original"],
                 reference,
-                demo=demo,
                 aspect=batch.get("aspect"),
                 quality=batch.get("quality"),
             )
@@ -261,7 +262,7 @@ def api_design():
     api_key = _model_key(model)
     try:
         out = generator.generate(model, api_key, prompt, UPLOAD_DIR / sample_name, None,
-                                 demo=is_demo(), aspect=aspect, quality=quality)
+                                 aspect=aspect, quality=quality)
         result_name = f"{uuid.uuid4().hex}.png"
         (RESULT_DIR / result_name).write_bytes(out)
     except Exception as e:  # noqa: BLE001
@@ -294,8 +295,7 @@ def api_regenerate(iid):
     else:
         prompt = custom_prompt or batch.get("prompt") or "حسّن هذه الصورة."
     api_key = _model_key(batch["model"])
-    reference = UPLOAD_DIR / batch["reference"] if batch.get("reference") else None
-    demo = is_demo()
+    reference = _ref_path(batch.get("reference"))
 
     store.update_image(iid, status="running", custom_prompt=custom_prompt or None)
     try:
@@ -307,13 +307,13 @@ def api_regenerate(iid):
             out = generator.generate_region(
                 batch["model"], api_key, prompt,
                 UPLOAD_DIR / img["original"], reference,
-                UPLOAD_DIR / mask_name, base, demo=demo,
+                UPLOAD_DIR / mask_name, base,
                 aspect=batch.get("aspect"), quality=batch.get("quality"),
             )
         else:
             out = generator.generate(
                 batch["model"], api_key, prompt,
-                UPLOAD_DIR / img["original"], reference, demo=demo,
+                UPLOAD_DIR / img["original"], reference,
                 aspect=batch.get("aspect"), quality=batch.get("quality"),
             )
         result_name = f"{uuid.uuid4().hex}.png"

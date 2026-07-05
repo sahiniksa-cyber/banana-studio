@@ -11,7 +11,7 @@ import base64
 import io
 import mimetypes
 import requests
-from PIL import Image, ImageOps, ImageEnhance
+from PIL import Image
 
 # معرّفات الموديلات
 NANO_BANANA_MODEL = "gemini-2.5-flash-image"
@@ -27,15 +27,9 @@ _OPENAI_SIZE = {
     "4:3": "1536x1024",
     "16:9": "1536x1024",
 }
-# نسب الأبعاد → أبعاد بكسل لوضع التجربة
-_ASPECT_PX = {
-    "1:1": (1024, 1024),
-    "3:4": (900, 1200),
-    "9:16": (720, 1280),
-    "4:3": (1200, 900),
-    "16:9": (1280, 720),
-}
 _VALID_QUALITY = {"low", "medium", "high"}
+
+NO_KEY_MSG = "لا يمكن إنشاء الصورة — أضف مفتاح API من الإعدادات."
 
 
 class GenerationError(Exception):
@@ -47,18 +41,10 @@ def _guess_mime(path):
     return mime or "image/png"
 
 
-def generate(model, api_key, prompt, input_path, reference_path=None, demo=False,
-             aspect=None, quality=None):
-    """يوزّع على الموديل المطلوب ويرجّع bytes للصورة الناتجة.
-
-    demo=True: يولّد نتيجة معالَجة محليًا بدون API (لتجربة المنصة بدون توكن).
-    aspect: 1:1 / 3:4 / 4:3 / 9:16 / 16:9
-    quality: low / medium / high (خاص بـ GPT-Image)
-    """
-    if demo:
-        return _to_png_bytes(_mock_transform(input_path, aspect=aspect))
+def generate(model, api_key, prompt, input_path, reference_path=None, aspect=None, quality=None):
+    """يوزّع على الموديل المطلوب ويرجّع bytes للصورة الناتجة."""
     if not api_key:
-        raise GenerationError("مفتاح API غير مضبوط. أضِفه من الإعدادات، أو فعّل وضع التجربة.")
+        raise GenerationError(NO_KEY_MSG)
     if model == "nano_banana":
         return _generate_gemini(api_key, prompt, input_path, reference_path, aspect)
     if model == "gpt_image":
@@ -67,37 +53,15 @@ def generate(model, api_key, prompt, input_path, reference_path=None, demo=False
 
 
 def generate_region(model, api_key, prompt, input_path, reference_path,
-                    mask_path, base_path, demo=False, aspect=None, quality=None):
-    """تعديل منطقة محددة فقط: يولّد صورة مرشّحة ثم يدمجها داخل القناع فوق الصورة الأساسية.
-
-    يعطي سلوك "أعِد رسم هذا الجزء فقط" لكل الموديلات وفي وضع التجربة.
-    """
+                    mask_path, base_path, aspect=None, quality=None):
+    """تعديل منطقة محددة فقط: يولّد صورة مرشّحة ثم يدمجها داخل القناع فوق الصورة الأساسية."""
     base = Image.open(base_path).convert("RGB")
     mask = Image.open(mask_path).convert("L").resize(base.size)
-    if demo:
-        candidate = _mock_transform(base_path, strong=True).resize(base.size)
-    else:
-        cand_bytes = generate(model, api_key, prompt, input_path, reference_path,
-                              demo=False, aspect=aspect, quality=quality)
-        candidate = Image.open(io.BytesIO(cand_bytes)).convert("RGB").resize(base.size)
+    cand_bytes = generate(model, api_key, prompt, input_path, reference_path,
+                          aspect=aspect, quality=quality)
+    candidate = Image.open(io.BytesIO(cand_bytes)).convert("RGB").resize(base.size)
     out = Image.composite(candidate, base, mask)
     return _to_png_bytes(out)
-
-
-# ---------- وضع التجربة (بدون API) ----------
-def _mock_transform(input_path, strong=False, aspect=None):
-    """يحوّل الصورة محليًا لإشارة بصرية واضحة أنها "مولّدة" (لأغراض التجربة)."""
-    im = Image.open(input_path).convert("RGB")
-    gray = ImageOps.grayscale(im)
-    if strong:
-        tint = ImageOps.colorize(gray, black=(10, 40, 70), white=(255, 200, 90))
-        tint = ImageEnhance.Contrast(tint).enhance(1.25)
-    else:
-        tint = ImageOps.colorize(gray, black=(25, 25, 60), white=(255, 220, 120))
-    # احترام نسبة الأبعاد المطلوبة (قص للتعبئة)
-    if aspect in _ASPECT_PX:
-        tint = ImageOps.fit(tint, _ASPECT_PX[aspect], Image.LANCZOS)
-    return tint
 
 
 def _to_png_bytes(im):
