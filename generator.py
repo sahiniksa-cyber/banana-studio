@@ -12,7 +12,7 @@ import io
 import logging
 import mimetypes
 import requests
-from PIL import Image, ImageFilter
+from PIL import Image, ImageFilter, ImageDraw
 
 _log = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ def lock_subject(original_path, generated_bytes):
     """يعزل المنتج من الصورة الأصلية ويلصقه فوق ناتج الذكاء.
 
     النتيجة: بكسل المنتج = الأصل تمامًا (شكل مضمون)، والخلفية/الأسلوب من الذكاء.
-    عند أي فشل في العزل نُرجع ناتج الذكاء كما هو بدل إيقاف العملية.
+    عند فشل العزل نرفع خطأً واضحًا (لا نمرّر منتجًا متغيّرًا بصمت أبدًا).
     """
     try:
         orig = Image.open(original_path).convert("RGB")
@@ -90,8 +90,24 @@ def lock_subject(original_path, generated_bytes):
         out = Image.composite(orig, gen, alpha)  # المنتج من الأصل، الباقي من الذكاء
         return _to_png_bytes(out)
     except Exception as e:  # noqa: BLE001
-        _log.warning("lock_subject فشل العزل، سيُستخدم ناتج الذكاء: %s", e)
-        return generated_bytes
+        _log.warning("lock_subject فشل العزل: %s", e)
+        raise GenerationError(f"تعذّر قفل شكل المنتج (عزل الخلفية): {e}") from e
+
+
+def rembg_selftest():
+    """فحص أن أداة العزل تعمل فعليًا (تُستخدم في /api/health)."""
+    img = Image.new("RGB", (64, 64), (240, 240, 240))
+    ImageDraw.Draw(img).ellipse([16, 16, 48, 48], fill=(200, 40, 40))
+    buf = io.BytesIO(); img.save(buf, "PNG")
+    out = lock_subject_from_image(img, buf.getvalue())
+    return out is not None
+
+
+def lock_subject_from_image(orig_img, generated_bytes):
+    gen = Image.open(io.BytesIO(generated_bytes)).convert("RGB")
+    from rembg import remove
+    alpha = remove(orig_img.convert("RGBA")).split()[3]
+    return _to_png_bytes(Image.composite(orig_img.convert("RGB"), gen, alpha))
 
 
 def _foreground_alpha(path):

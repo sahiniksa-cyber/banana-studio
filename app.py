@@ -107,6 +107,23 @@ def index():
 
 
 # ============ الإعدادات (مفاتيح API) ============
+@app.route("/api/health")
+def health():
+    info = {
+        "ok": True,
+        "gpt_image_key_set": bool(store.get_setting("gpt_image_key")),
+        "nano_banana_key_set": bool(store.get_setting("nano_banana_key")),
+        "data_dir": str(DATA_DIR),
+    }
+    if request.args.get("rembg") == "1":
+        try:
+            info["rembg_ok"] = bool(generator.rembg_selftest())
+        except Exception as e:  # noqa: BLE001
+            info["rembg_ok"] = False
+            info["rembg_error"] = str(e)[:250]
+    return jsonify(info)
+
+
 @app.route("/api/settings", methods=["GET"])
 def get_settings():
     return jsonify(
