@@ -753,29 +753,44 @@ async function deleteTemplate(tid) {
 }
 
 // ===== شاشة: الإعدادات =====
+function keyRow(label, id, envSet, keySet, ph) {
+  if (envSet) {
+    return `<label>${label}</label>
+      <div class="env-key">${icon("check")}<span>مُدار من Railway (متغيّر بيئة) — آمن، ولا يظهر في المنصة</span></div>`;
+  }
+  return `<label>${label}</label>
+    <input type="password" id="${id}" placeholder="${keySet ? "•••••••• (محفوظ)" : ph}">`;
+}
+
 async function viewSettings() {
   const s = await api("/api/settings");
+  const anyEditable = !s.gpt_image_key_env || !s.nano_banana_key_env;
   main.innerHTML = `
     <div class="page-title">الإعدادات</div>
-    <div class="page-sub">مفاتيح API الخاصة بك (تُحفظ في ملف دائم لا يُحذف)</div>
+    <div class="page-sub">المفاتيح تُدار من Railway (متغيّرات بيئة) — الأأمن والموصى به</div>
     <div class="card">
-      <label>مفتاح Nano Banana (Google Gemini API)</label>
-      <input type="password" id="s-nano" placeholder="${s.nano_banana_key_set ? "•••••••• (محفوظ)" : "AIza..."}">
-      <label>مفتاح GPT-Image (OpenAI API)</label>
-      <input type="password" id="s-gpt" placeholder="${s.gpt_image_key_set ? "•••••••• (محفوظ)" : "sk-..."}">
-      <button class="btn" onclick="saveSettings()">${icon("save")}<span>حفظ</span></button>
+      ${keyRow("مفتاح Nano Banana (Google Gemini API)", "s-nano", s.nano_banana_key_env, s.nano_banana_key_set, "AIza...")}
+      ${keyRow("مفتاح GPT-Image (OpenAI API)", "s-gpt", s.gpt_image_key_env, s.gpt_image_key_set, "sk-...")}
+      ${anyEditable ? `<button class="btn" onclick="saveSettings()">${icon("save")}<span>حفظ</span></button>` : ""}
     </div>
     <div class="card hint-card">
-      <b>من أين أحصل على المفاتيح؟</b><br>
-      • Nano Banana (Gemini): <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a> — المفتاح يبدأ بـ <code>AIza</code><br>
-      • GPT-Image (OpenAI): <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com/api-keys</a> — المفتاح يبدأ بـ <code>sk-</code>
+      <b>الطريقة الموصى بها — ضع المفاتيح في Railway (لا تظهر في المنصة):</b><br>
+      Railway → الخدمة <code>web</code> → <b>Variables</b> → أضف:<br>
+      • <code>OPENAI_API_KEY</code> = مفتاح GPT-Image (يبدأ بـ <code>sk-</code>)<br>
+      • <code>GEMINI_API_KEY</code> = مفتاح Nano Banana (يبدأ بـ <code>AIza</code>)<br>
+      بعد الحفظ تُعيد الخدمة النشر وتُقرأ المفاتيح تلقائيًا.<br><br>
+      <b>مصادر المفاتيح:</b><br>
+      • Gemini: <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a><br>
+      • OpenAI: <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com/api-keys</a>
     </div>`;
 }
 
 async function saveSettings() {
   const body = {};
-  const nano = document.getElementById("s-nano").value.trim();
-  const gpt = document.getElementById("s-gpt").value.trim();
+  const nanoEl = document.getElementById("s-nano");
+  const gptEl = document.getElementById("s-gpt");
+  const nano = nanoEl ? nanoEl.value.trim() : "";
+  const gpt = gptEl ? gptEl.value.trim() : "";
   if (nano) body.nano_banana_key = nano;
   if (gpt) body.gpt_image_key = gpt;
   await api("/api/settings", {

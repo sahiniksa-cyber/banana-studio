@@ -387,6 +387,17 @@ select {
 .empty .big .ico { width: 32px; height: 32px; }
 .empty p { margin-bottom: 20px; font-size: 0.95rem; }
 
+.env-key {
+  display: flex; align-items: center; gap: 9px;
+  background: var(--ok-bg); border: 1px solid var(--ok-border); color: var(--ok);
+  border-radius: 10px; padding: 12px 14px; font-size: 0.88rem; font-weight: 600;
+  margin-bottom: 16px;
+}
+.env-key .ico { width: 18px; height: 18px; flex: none; }
+.hint-card code {
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 5px; padding: 1px 6px; font-size: 0.85em; direction: ltr; display: inline-block;
+}
 .hint-card { font-size: 0.86rem; color: var(--muted); line-height: 1.9; }
 .hint-card b { color: var(--text); }
 .hint-card a { color: var(--blue); text-decoration: none; }

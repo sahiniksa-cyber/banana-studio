@@ -123,10 +123,14 @@ def health():
 
 @app.route("/api/settings", methods=["GET"])
 def get_settings():
+    gpt_env = bool(_env_key("gpt_image"))
+    nano_env = bool(_env_key("nano_banana"))
     return jsonify(
         {
-            "nano_banana_key_set": bool(store.get_setting("nano_banana_key")),
-            "gpt_image_key_set": bool(store.get_setting("gpt_image_key")),
+            "gpt_image_key_set": gpt_env or bool(store.get_setting("gpt_image_key")),
+            "nano_banana_key_set": nano_env or bool(store.get_setting("nano_banana_key")),
+            "gpt_image_key_env": gpt_env,     # مُدار من Railway
+            "nano_banana_key_env": nano_env,  # مُدار من Railway
         }
     )
 
@@ -213,8 +217,21 @@ def api_create_batch():
     return jsonify({"id": bid})
 
 
+def _env_key(model):
+    """مفتاح من متغيّرات بيئة Railway (له الأولوية، لا يُحفظ في ملفات المنصة)."""
+    if model == "nano_banana":
+        return (os.environ.get("NANO_BANANA_KEY")
+                or os.environ.get("GEMINI_API_KEY")
+                or os.environ.get("GOOGLE_API_KEY") or "").strip()
+    return (os.environ.get("GPT_IMAGE_KEY")
+            or os.environ.get("OPENAI_API_KEY") or "").strip()
+
+
 def _model_key(model):
-    return store.get_setting("nano_banana_key" if model == "nano_banana" else "gpt_image_key")
+    # الأولوية لمتغيّر البيئة (Railway)، ثم ما هو محفوظ محليًا (إن وُجد)
+    return _env_key(model) or store.get_setting(
+        "nano_banana_key" if model == "nano_banana" else "gpt_image_key"
+    )
 
 
 def _process_batch(bid):
