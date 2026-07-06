@@ -48,10 +48,26 @@ def _guess_mime(path):
     return mime or "image/png"
 
 
+def _validate_key(model, key):
+    """يمنع تبادل المفاتيح: مفتاح OpenAI (sk-) لـ GPT-Image فقط، وGoogle (AIza) لـ Gemini."""
+    k = (key or "").strip()
+    if model == "gpt_image" and k.startswith("AIza"):
+        raise GenerationError(
+            "وضعت مفتاح Google (Gemini) في خانة GPT-Image. "
+            "GPT-Image يحتاج مفتاح OpenAI يبدأ بـ sk-."
+        )
+    if model in GEMINI_MODELS and k.startswith("sk-"):
+        raise GenerationError(
+            "وضعت مفتاح OpenAI في خانة Nano Banana. "
+            "Nano Banana يحتاج مفتاح Google يبدأ بـ AIza."
+        )
+
+
 def generate(model, api_key, prompt, input_path, reference_path=None, aspect=None, quality=None):
     """يوزّع على الموديل المطلوب ويرجّع bytes للصورة الناتجة."""
     if not api_key:
         raise GenerationError(NO_KEY_MSG)
+    _validate_key(model, api_key)
     if model in GEMINI_MODELS:
         return _generate_gemini(api_key, prompt, input_path, reference_path, aspect,
                                 GEMINI_MODELS[model])
