@@ -17,7 +17,7 @@ from PIL import Image, ImageFilter, ImageDraw
 _log = logging.getLogger(__name__)
 
 # معرّفات الموديلات
-GPT_IMAGE_MODEL = "gpt-image-1"
+GPT_IMAGE_MODEL = "gpt-image-2"   # أحدث موديل صور من OpenAI (مؤكّد يعمل مع حساب المستخدم)
 # خرائط موديلات Gemini (الاسم الودّي → معرّف الـ API)
 GEMINI_MODELS = {
     "nano_banana": "gemini-2.5-flash-image",       # Nano Banana
