@@ -398,6 +398,18 @@ select {
   background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 5px; padding: 1px 6px; font-size: 0.85em; direction: ltr; display: inline-block;
 }
+/* ===== لوحة الوصفة في تفاصيل الدفعة ===== */
+.recipe { margin-bottom: 22px; }
+.recipe-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.recipe-prompt {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; font-size: 0.92rem; line-height: 1.8; color: var(--text);
+  white-space: pre-wrap; margin-bottom: 12px;
+}
+.recipe-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.recipe-tags .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 0.76rem; }
+.recipe-tags .badge .ico { width: 14px; height: 14px; }
+
 .hint-card { font-size: 0.86rem; color: var(--muted); line-height: 1.9; }
 .hint-card b { color: var(--text); }
 .hint-card a { color: var(--blue); text-decoration: none; }

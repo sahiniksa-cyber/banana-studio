@@ -106,18 +106,29 @@ function navigate(view) {
   else if (view === "settings") viewSettings();
 }
 
-// ===== شاشة: الدفعات =====
+function fmtDate(ts) {
+  if (!ts) return "";
+  try { return new Date(ts * 1000).toLocaleString("ar", { dateStyle: "medium", timeStyle: "short" }); }
+  catch (e) { return ""; }
+}
+function modeLabel(b) {
+  if (b.lock_subject) return "قفل المنتج";
+  if (b.strict) return "قالب ثابت";
+  return "طبيعي";
+}
+
+// ===== شاشة: المكتبة (كل التصاميم مع برومبتها وخياراتها) =====
 async function viewBatches() {
-  main.innerHTML = `<div class="page-title">الدفعات</div>
-    <div class="page-sub">كل دفعات التوليد التي أنشأتها</div>
+  main.innerHTML = `<div class="page-title">المكتبة</div>
+    <div class="page-sub">كل التصاميم التي أنشأتها — اضغط أيًّا منها لرؤية البرومبت والخيارات وإعادة الاستخدام</div>
     <div id="batches-list"><div class="empty">جارِ التحميل…</div></div>`;
   const batches = await api("/api/batches");
   const el = document.getElementById("batches-list");
   if (!batches.length) {
     el.innerHTML = `<div class="empty">
       <div class="big">${icon("inbox")}</div>
-      <p>لا توجد دفعات بعد. ابدأ بإنشاء دفعتك الأولى.</p>
-      <button class="btn" onclick="navigate('new-batch')">${icon("plus")}<span>أنشئ أول دفعة</span></button></div>`;
+      <p>المكتبة فارغة. ابدأ بإنشاء أول تصميم.</p>
+      <button class="btn" onclick="navigate('new-batch')">${icon("plus")}<span>أنشئ أول تصميم</span></button></div>`;
     return;
   }
   el.className = "grid-cards";
@@ -126,12 +137,14 @@ async function viewBatches() {
       <div class="thumb">${icon("image")} ${b.total} صورة</div>
       <div class="body">
         <h4>${escapeHtml(b.name)}</h4>
-        <p>القالب: ${escapeHtml(b.template_name || "بدون")}</p>
+        <p>${b.prompt ? escapeHtml(b.prompt) : "قالب مرجعي (بدون برومبت)"}</p>
         <div class="meta">
-          <span>${modelLabel(b.model)}</span> ·
+          <span class="badge">${escapeHtml(modeLabel(b))}</span>
+          <span>${b.aspect || "1:1"}</span> ·
           <span>${b.done}/${b.total} جاهزة</span>
           <span class="badge ${b.status === "done" ? "done" : "running"}"><span class="dot"></span>${statusLabel(b.status)}</span>
         </div>
+        <div class="meta" style="margin-top:4px;color:var(--muted-2)">${fmtDate(b.created_at)}</div>
       </div>
     </div>`).join("");
 }
@@ -227,7 +240,7 @@ function wireChoicePills(id, stateObj, prop, defaultVal) {
 }
 function qualityNote(id) {
   return `<div id="${id}" class="page-sub" style="margin-top:-8px;font-size:0.78rem">
-    الجودة تؤثر في GPT-Image (وفي التكلفة). Nano Banana يولّد بأعلى جودة تلقائيًا.</div>`;
+    الجودة الأعلى تعطي تفاصيل أدق (وتكلفة أعلى قليلًا).</div>`;
 }
 function lockToggle(id) {
   return `<label class="check-row" style="margin:6px 0 16px">
@@ -256,9 +269,6 @@ function viewDesignMode() {
           <div class="file-drop" id="d-drop">${icon("upload")}<span>اختر صورة منتج للتجربة</span></div>
           <input type="file" id="d-sample" accept="image/*" class="hidden">
           <div id="d-sample-name" class="page-sub"></div>
-
-          <label>الموديل</label>
-          ${modelPills("d-model")}
 
           <label>المقاس / نسبة الأبعاد</label>
           ${choicePills("d-aspect", ASPECTS, "1:1", true)}
@@ -295,7 +305,7 @@ function viewDesignMode() {
       <button class="btn" id="d-run" onclick="designRun()">${icon("play")}<span>ابدأ التوليد على الكل</span></button>
     </div>`;
 
-  wireModelPills("d-model", design);
+  design.model = "gpt_image";
   wireChoicePills("d-aspect", design, "aspect", "1:1");
   wireChoicePills("d-quality", design, "quality", "high");
   wireDrop("d-drop", "d-sample", null);
@@ -303,6 +313,23 @@ function viewDesignMode() {
     document.getElementById("d-sample-name").textContent = e.target.files[0]?.name || "";
   });
   wireDrop("d-batch-drop", "d-batch-files", "d-batch-count");
+
+  // إعادة استخدام إعدادات دفعة سابقة (إن وُجدت)
+  if (PREFILL) {
+    document.getElementById("d-prompt").value = PREFILL.prompt;
+    setChoice("d-aspect", design, "aspect", PREFILL.aspect);
+    setChoice("d-quality", design, "quality", PREFILL.quality);
+    document.getElementById("d-lock").checked = PREFILL.lock;
+    PREFILL = null;
+  }
+}
+
+function setChoice(id, stateObj, prop, val) {
+  document.querySelectorAll(`#${id} .pill`).forEach((p) => {
+    const on = p.dataset.val === val;
+    p.classList.toggle("active", on);
+    if (on) stateObj[prop] = val;
+  });
 }
 
 async function designGenerate() {
@@ -400,9 +427,6 @@ async function viewReferenceMode() {
         <div id="r-ref-name" class="page-sub"></div>
       </div>
 
-      <label>الموديل</label>
-      ${modelPills("r-model")}
-
       <label>المقاس / نسبة الأبعاد</label>
       ${choicePills("r-aspect", ASPECTS, "1:1", true)}
 
@@ -420,7 +444,7 @@ async function viewReferenceMode() {
       <button class="btn" id="r-run" onclick="refRun()">${icon("play")}<span>ابدأ التوليد على الكل</span></button>
     </div>`;
 
-  wireModelPills("r-model", refMode);
+  refMode.model = "gpt_image";
   wireChoicePills("r-aspect", refMode, "aspect", "1:1");
   wireChoicePills("r-quality", refMode, "quality", "high");
   wireDrop("r-ref-drop", "r-ref", null);
@@ -490,8 +514,43 @@ async function renderBatch() {
         <a class="btn" href="/api/batches/${b.id}/download">${icon("download")}<span>تحميل الكل</span></a>
       </div>
     </div>
+    <div class="card recipe">
+      <div class="recipe-head">
+        <b>الوصفة (البرومبت + الخيارات)</b>
+        <div class="row" style="flex:0">
+          <button class="btn ghost sm" onclick='copyPrompt(${JSON.stringify(b.prompt || "")})'>${icon("copy")}<span>نسخ البرومبت</span></button>
+          <button class="btn sm" onclick="reuseBatch(${b.id})">${icon("refresh")}<span>دفعة جديدة بنفس الإعدادات</span></button>
+        </div>
+      </div>
+      <div class="recipe-prompt">${b.prompt ? escapeHtml(b.prompt) : "— قالب مرجعي بدون برومبت —"}</div>
+      <div class="recipe-tags">
+        <span class="badge">${icon("cpu")} ${modelLabel(b.model)}</span>
+        <span class="badge">المقاس: ${b.aspect || "1:1"}</span>
+        <span class="badge">الجودة: ${qualityLabel(b.quality)}</span>
+        <span class="badge">الوضع: ${escapeHtml(modeLabel(b))}</span>
+        <span class="badge">القالب: ${escapeHtml(b.template_name || "بدون")}</span>
+        <span class="badge">${fmtDate(b.created_at)}</span>
+      </div>
+    </div>
     <div class="image-grid" id="img-grid"></div>`;
   renderBatchImages();
+}
+
+function qualityLabel(q) { return { high: "عالية", medium: "متوسطة", low: "سريعة" }[q] || q || "عالية"; }
+
+async function copyPrompt(text) {
+  try { await navigator.clipboard.writeText(text || ""); toast("تم نسخ البرومبت"); }
+  catch (e) { toast("تعذّر النسخ"); }
+}
+
+// إعادة استخدام نفس إعدادات دفعة سابقة (يفتح تصميمًا جديدًا مملوءًا مسبقًا)
+let PREFILL = null;
+async function reuseBatch(bid) {
+  const b = await api(`/api/batches/${bid}`);
+  PREFILL = { prompt: b.prompt || "", aspect: b.aspect || "1:1", quality: b.quality || "high", lock: !!b.lock_subject };
+  setActive("new-batch");
+  viewDesignMode();
+  toast("جاهز — ارفع صورة وولّد بنفس الإعدادات");
 }
 
 async function renderBatchImages() {
