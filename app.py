@@ -438,6 +438,15 @@ def media_result(name):
     return send_file(RESULT_DIR / secure_filename(name))
 
 
+@app.route("/media/ref/<name>")
+def media_ref(name):
+    # مرجع قد يكون في uploads أو results
+    p = _ref_path(secure_filename(name))
+    if not p or not p.exists():
+        abort(404)
+    return send_file(p)
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5001))
     # 127.0.0.1 محليًا، و0.0.0.0 عند الاستضافة (عبر ضبط HOST)

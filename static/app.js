@@ -99,7 +99,7 @@ function setActive(view) {
 }
 
 function navigate(view) {
-  clearInterval(pollTimer);
+  stopPoll();
   setActive(view);
   if (view === "batches") viewBatches();
   else if (view === "new-batch") viewNewBatch();
@@ -540,7 +540,14 @@ async function openBatch(bid) {
   currentBatchId = bid;
   setActive("batches");
   await renderBatch();
-  pollTimer = setInterval(renderBatchImages, 2500);
+  ensurePoll();
+}
+
+function ensurePoll() {
+  if (!pollTimer) pollTimer = setInterval(renderBatchImages, 2500);
+}
+function stopPoll() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 
 async function renderBatch() {
@@ -554,7 +561,7 @@ async function renderBatch() {
       </div>
       <div class="row" style="flex:0">
         <button class="btn ghost" onclick="navigate('batches')">${icon("arrowRight")}<span>رجوع</span></button>
-        <button class="btn ghost" onclick="navigate('new-batch')">${icon("edit")}<span>صفحة البرومبت</span></button>
+        <button class="btn ghost" onclick="reuseBatch(${b.id})">${icon("edit")}<span>صفحة البرومبت</span></button>
         <button class="btn danger" onclick="deleteBatch(${b.id})">${icon("trash")}<span>حذف</span></button>
         <button class="btn" onclick="downloadAllImages(${b.id})">${icon("download")}<span>تحميل الصور</span></button>
       </div>
@@ -606,14 +613,22 @@ async function copyPrompt(text) {
   catch (e) { toast("تعذّر النسخ"); }
 }
 
-// إعادة استخدام نفس إعدادات دفعة سابقة (يفتح تصميمًا جديدًا مملوءًا مسبقًا)
+// فتح صفحة البرومبت لدفعة سابقة: بالصورة الأساسية + البرومبت + كل الإعدادات
 let PREFILL = null;
 async function reuseBatch(bid) {
   const b = await api(`/api/batches/${bid}`);
   PREFILL = { prompt: b.prompt || "", aspect: b.aspect || "1:1", quality: b.quality || "high", lock: !!b.lock_subject };
   setActive("new-batch");
   viewDesignMode();
-  toast("جاهز — ارفع صورة وولّد بنفس الإعدادات");
+  // عرض الصورة الأساسية (المرجع) وتمكين الاعتماد المباشر
+  if (b.reference) {
+    design.resultName = b.reference;
+    design.prompt = b.prompt || "";
+    document.getElementById("d-preview").innerHTML =
+      `<img src="/media/ref/${b.reference}?t=${Date.now()}" alt="">`;
+    document.getElementById("d-actions").classList.remove("hidden");
+  }
+  toast("عدّل الإعدادات أو البرومبت، ثم ولّد من جديد أو اعتمد");
 }
 
 async function renderBatchImages() {
@@ -630,21 +645,44 @@ async function renderBatchImages() {
       ${overlay}
     </div>`;
   }).join("");
-  if (b.status === "done") clearInterval(pollTimer);
+  // نستمر بالتحديث ما دامت أي صورة قيد المعالجة (يشمل التعديلات بعد اكتمال الدفعة)
+  const anyRunning = b.images.some((i) => i.status === "running" || i.status === "queued");
+  if (!anyRunning) stopPoll();
 }
 
 async function deleteBatch(bid) {
   if (!confirm("حذف هذه الدفعة وكل صورها؟")) return;
-  clearInterval(pollTimer);
+  stopPoll();
   await api(`/api/batches/${bid}`, { method: "DELETE" });
   toast("تم حذف الدفعة");
   navigate("batches");
 }
 
 // ===== نافذة التعديل =====
-// حالة الفرشاة
+// حالة أدوات التحديد
 let brushOn = false;
 let maskDirty = false;
+let brushTool = "brush";  // brush | rect | erase
+
+function setTool(t) {
+  brushTool = t;
+  document.querySelectorAll("#tool-group .tool").forEach((b) =>
+    b.classList.toggle("active", b.dataset.tool === t)
+  );
+  if (!brushOn) toggleBrush();  // تفعيل وضع التحديد تلقائيًا
+  const hints = { brush: "ارسم فوق المنطقة", rect: "اسحب لرسم مستطيل", erase: "امسح من التحديد" };
+  document.getElementById("brush-hint").textContent = "— " + (hints[t] || "");
+}
+
+function selectAllMask() {
+  const c = maskCanvas();
+  if (!brushOn) toggleBrush();
+  const ctx = c.getContext("2d");
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = "rgba(37,99,235,0.5)";
+  ctx.fillRect(0, 0, c.width, c.height);
+  maskDirty = true;
+}
 
 async function openImage(iid) {
   currentImageId = iid;
@@ -666,6 +704,7 @@ async function openImage(iid) {
   else dl.classList.add("hidden");
 
   resetBrush();
+  setBtn(document.getElementById("regen-btn"), "refresh", "إعادة توليد");
   resultImg.onload = sizeMaskCanvas;
   document.getElementById("overlay").classList.add("open");
 }
@@ -692,9 +731,14 @@ function sizeMaskCanvas() {
 function resetBrush() {
   brushOn = false;
   maskDirty = false;
+  brushTool = "brush";
   const c = maskCanvas();
   c.classList.remove("active");
   document.getElementById("brush-toggle").classList.remove("on");
+  document.getElementById("brush-hint").textContent = "";
+  document.querySelectorAll("#tool-group .tool").forEach((b) =>
+    b.classList.toggle("active", b.dataset.tool === "brush")
+  );
 }
 
 function toggleBrush() {
@@ -713,9 +757,11 @@ function clearMask() {
   maskDirty = false;
 }
 
-// رسم بالفرشاة
+// رسم أدوات التحديد (فرشاة / مستطيل / ممحاة)
 (function setupBrushDrawing() {
   let drawing = false;
+  let rectStart = null;
+  let rectSnap = null;
   function pos(e) {
     const c = maskCanvas();
     const r = c.getBoundingClientRect();
@@ -727,19 +773,45 @@ function clearMask() {
     const c = maskCanvas();
     const ctx = c.getContext("2d");
     const size = +document.getElementById("brush-size").value;
+    ctx.globalCompositeOperation = brushTool === "erase" ? "destination-out" : "source-over";
     ctx.fillStyle = "rgba(37,99,235,0.5)";
     ctx.beginPath();
     ctx.arc(x, y, size / 2, 0, Math.PI * 2);
     ctx.fill();
+    ctx.globalCompositeOperation = "source-over";
     maskDirty = true;
+  }
+  function drawRect(a, b) {
+    const c = maskCanvas();
+    const ctx = c.getContext("2d");
+    ctx.putImageData(rectSnap, 0, 0);            // استعادة ما قبل السحب
+    ctx.fillStyle = "rgba(37,99,235,0.5)";
+    ctx.fillRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
   }
   const attach = () => {
     const c = maskCanvas();
     if (!c || c._wired) return;
     c._wired = true;
-    const start = (e) => { if (!brushOn) return; drawing = true; const q = pos(e); dot(q.x, q.y); e.preventDefault(); };
-    const move = (e) => { if (!brushOn || !drawing) return; const q = pos(e); dot(q.x, q.y); e.preventDefault(); };
-    const end = () => { drawing = false; };
+    const start = (e) => {
+      if (!brushOn) return;
+      drawing = true; e.preventDefault();
+      const q = pos(e);
+      if (brushTool === "rect") {
+        rectStart = q;
+        rectSnap = c.getContext("2d").getImageData(0, 0, c.width, c.height);
+      } else dot(q.x, q.y);
+    };
+    const move = (e) => {
+      if (!brushOn || !drawing) return;
+      e.preventDefault();
+      const q = pos(e);
+      if (brushTool === "rect") drawRect(rectStart, q);
+      else dot(q.x, q.y);
+    };
+    const end = () => {
+      if (drawing && brushTool === "rect") maskDirty = true;
+      drawing = false; rectStart = null; rectSnap = null;
+    };
     c.addEventListener("mousedown", start);
     c.addEventListener("mousemove", move);
     window.addEventListener("mouseup", end);
@@ -771,48 +843,50 @@ function buildMaskBlob(cb) {
   off.toBlob(cb, "image/png");
 }
 
+// تعديل بالخلفية: يبدأ التعديل ثم يغلق النافذة فورًا حتى تكمل التصفح وتعدّل غيرها
 async function regenerate() {
-  const btn = document.getElementById("regen-btn");
-  setLoading(btn, "جارِ التوليد…");
+  const imageId = currentImageId;
   const prompt = document.getElementById("modal-prompt").value;
+  const useMask = maskDirty;
+  const maskBlob = useMask ? await new Promise((res) => buildMaskBlob(res)) : null;
 
-  const finish = (img) => {
-    if (img.status === "failed") {
-      toast("فشل التوليد");
-      const err = document.getElementById("modal-error");
-      err.innerHTML = icon("alert") + `<span>فشل: ${escapeHtml(img.error || "")}</span>`;
-      err.classList.remove("hidden");
-    } else {
-      toast("تم التوليد!");
-      document.getElementById("modal-error").classList.add("hidden");
-      document.getElementById("modal-result").src = `/media/result/${img.result}?t=${Date.now()}`;
-      clearMask();
-    }
-    renderBatchImages();
-    setBtn(btn, "refresh", "إعادة توليد");
-  };
+  closeModal();          // حرّر المستخدم فورًا
+  ensurePoll();          // المعرض يحدّث نفسه ويُظهر "يعالج…"
+  markCellRunning(imageId);
+  toast("بدأ التعديل في الخلفية…");
 
   try {
-    if (maskDirty) {
-      // إرسال قناع المنطقة
-      buildMaskBlob(async (blob) => {
-        const fd = new FormData();
-        fd.append("prompt", prompt);
-        fd.append("mask", blob, "mask.png");
-        try { finish(await api(`/api/images/${currentImageId}/regenerate`, { method: "POST", body: fd })); }
-        catch (e) { toast(e.message); setBtn(btn, "refresh", "إعادة توليد"); }
-      });
+    let img;
+    if (maskBlob) {
+      const fd = new FormData();
+      fd.append("prompt", prompt);
+      fd.append("mask", maskBlob, "mask.png");
+      img = await api(`/api/images/${imageId}/regenerate`, { method: "POST", body: fd });
     } else {
-      const img = await api(`/api/images/${currentImageId}/regenerate`, {
+      img = await api(`/api/images/${imageId}/regenerate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt }),
       });
-      finish(img);
     }
+    if (currentBatchId) renderBatchImages();
+    toast(img.status === "failed" ? "فشل تعديل صورة" : "تم تعديل صورة ✓");
   } catch (e) {
     toast(e.message);
-    setBtn(btn, "refresh", "إعادة توليد");
+    if (currentBatchId) renderBatchImages();
+  }
+}
+
+// تعليم الخلية كمعالجة فورًا (قبل أول دورة تحديث)
+function markCellRunning(iid) {
+  const grid = document.getElementById("img-grid");
+  if (!grid) return;
+  const cell = grid.querySelector(`.img-cell[onclick="openImage(${iid})"]`);
+  if (cell && !cell.querySelector(".spin")) {
+    const s = document.createElement("div");
+    s.className = "spin";
+    s.innerHTML = `${spinner()} يعالج…`;
+    cell.appendChild(s);
   }
 }
 

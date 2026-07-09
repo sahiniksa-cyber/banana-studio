@@ -384,6 +384,14 @@ select {
 .brush-size-wrap input[type=range] { width: 120px; margin: 0; accent-color: var(--blue); }
 #brush-toggle.on { background: var(--blue); color: #fff; border-color: var(--blue); }
 #brush-toggle.on .ico { color: #fff; }
+.tool-group { display: inline-flex; gap: 4px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
+.tool {
+  width: 32px; height: 30px; border: none; background: none; border-radius: 6px;
+  cursor: pointer; color: var(--muted); display: flex; align-items: center; justify-content: center;
+}
+.tool .ico { width: 17px; height: 17px; }
+.tool:hover { color: var(--text); background: var(--panel); }
+.tool.active { background: var(--blue); color: #fff; }
 
 /* ===== التنبيهات والحالات ===== */
 .demo-banner {
