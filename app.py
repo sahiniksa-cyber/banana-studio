@@ -256,6 +256,11 @@ def _model_key(model):
     )
 
 
+def _text_key():
+    """مفتاح OpenAI لتحسين البرومبت النصّي (مستقل عن موديل الصورة)."""
+    return _model_key("gpt_image")
+
+
 def _process_batch(bid):
     batch = store.get_batch(bid)
     if not batch:
@@ -263,7 +268,12 @@ def _process_batch(bid):
     store.set_batch_status(bid, "running")
     api_key = _model_key(batch["model"])
     reference = _ref_path(batch.get("reference"))
-    prompt = build_prompt(batch.get("prompt"), reference is not None, batch.get("strict"))
+    # تحسين البرومبت مرة واحدة للدفعة (مثل ChatGPT) — للوضع غير الصارم فقط
+    raw = batch.get("prompt")
+    if raw and not batch.get("strict"):
+        raw = generator.enhance_prompt(raw, _text_key())
+    prompt = build_prompt(raw, reference is not None, batch.get("strict"))
+    lock = bool(batch.get("lock_subject"))
 
     for img in store.list_images(bid):
         store.update_image(img["id"], status="running")
@@ -277,8 +287,8 @@ def _process_batch(bid):
                 aspect=batch.get("aspect"),
                 quality=batch.get("quality"),
             )
-            # قفل المنتج إجباري دائمًا: يستحيل أن يتغيّر شكل المنتج
-            out = generator.lock_subject(UPLOAD_DIR / img["original"], out)
+            if lock:  # قفل المنتج (اختياري): يحفظ شكل المنتج تمامًا
+                out = generator.lock_subject(UPLOAD_DIR / img["original"], out)
             result_name = f"{uuid.uuid4().hex}.png"
             (RESULT_DIR / result_name).write_bytes(out)
             store.update_image(img["id"], status="done", result=result_name, error=None)
@@ -342,11 +352,12 @@ def api_design():
 
     api_key = _model_key(model)
     try:
-        eff = build_prompt(prompt, has_reference=False, strict=False)
+        enhanced = generator.enhance_prompt(prompt, _text_key())
+        eff = build_prompt(enhanced, has_reference=False, strict=False)
         out = generator.generate(model, api_key, eff, UPLOAD_DIR / sample_name, None,
                                  aspect=aspect, quality=quality)
-        # قفل المنتج إجباري دائمًا
-        out = generator.lock_subject(UPLOAD_DIR / sample_name, out)
+        if lock:
+            out = generator.lock_subject(UPLOAD_DIR / sample_name, out)
         result_name = f"{uuid.uuid4().hex}.png"
         (RESULT_DIR / result_name).write_bytes(out)
     except Exception as e:  # noqa: BLE001
@@ -379,9 +390,13 @@ def api_regenerate(iid):
     reference = _ref_path(batch.get("reference"))
     # برومبت مخصص من المستخدم يتقدّم؛ وإلا نستخدم برومبت الدفعة/الثبات
     if custom_prompt:
-        prompt = build_prompt(custom_prompt, reference is not None, strict=False)
+        prompt = build_prompt(generator.enhance_prompt(custom_prompt, _text_key()),
+                              reference is not None, strict=False)
     else:
-        prompt = build_prompt(batch.get("prompt"), reference is not None, batch.get("strict"))
+        raw = batch.get("prompt")
+        if raw and not batch.get("strict"):
+            raw = generator.enhance_prompt(raw, _text_key())
+        prompt = build_prompt(raw, reference is not None, batch.get("strict"))
 
     store.update_image(iid, status="running", custom_prompt=custom_prompt or None)
     try:
@@ -402,8 +417,8 @@ def api_regenerate(iid):
                 UPLOAD_DIR / img["original"], reference,
                 aspect=batch.get("aspect"), quality=batch.get("quality"),
             )
-            # قفل المنتج إجباري دائمًا (إلا عند تعديل منطقة محددة بالفرشاة)
-            out = generator.lock_subject(UPLOAD_DIR / img["original"], out)
+            if batch.get("lock_subject"):  # قفل المنتج (اختياري)
+                out = generator.lock_subject(UPLOAD_DIR / img["original"], out)
         result_name = f"{uuid.uuid4().hex}.png"
         (RESULT_DIR / result_name).write_bytes(out)
         store.update_image(iid, status="done", result=result_name, error=None)

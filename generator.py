@@ -38,6 +38,53 @@ _VALID_QUALITY = {"low", "medium", "high"}
 
 NO_KEY_MSG = "لا يمكن إنشاء الصورة — أضف مفتاح API من الإعدادات."
 
+# تحسين البرومبت (يقلّد ما يفعله ChatGPT داخليًا قبل التوليد)
+ENHANCE_MODEL = "gpt-4o-mini"
+_ENHANCE_SYS = (
+    "You are an expert product-photography prompt engineer for an AI image editor. "
+    "Rewrite the user's brief instruction into ONE vivid, detailed English prompt to "
+    "edit an EXISTING product photo. Describe background, lighting, shadows, composition, "
+    "mood, lens and commercial 'ChatGPT-quality' polish. CRITICAL: keep the product itself "
+    "unchanged (same shape, colors, details). Output ONLY the final prompt, no preamble."
+)
+
+
+def enhance_prompt(user_prompt, openai_key):
+    """يوسّع أمر المستخدم القصير إلى برومبت احترافي غني (مثل ChatGPT).
+
+    يستخدم موديلًا نصّيًا من OpenAI؛ وعند أي فشل يرجع لصيغة ثابتة جيدة (لا يكسر التوليد).
+    """
+    up = (user_prompt or "").strip()
+    if not up:
+        return up
+    static = (
+        f"High-end professional product photography. {up}. Studio lighting, soft natural "
+        "shadows, clean balanced composition, sharp focus, fine detail, commercial quality."
+    )
+    if not openai_key or not openai_key.startswith("sk-"):
+        return static
+    try:
+        r = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {openai_key}"},
+            json={
+                "model": ENHANCE_MODEL,
+                "messages": [
+                    {"role": "system", "content": _ENHANCE_SYS},
+                    {"role": "user", "content": up},
+                ],
+                "temperature": 0.7,
+                "max_tokens": 300,
+            },
+            timeout=60,
+        )
+        if r.status_code == 200:
+            txt = (r.json()["choices"][0]["message"]["content"] or "").strip()
+            return txt or static
+    except Exception:  # noqa: BLE001
+        pass
+    return static
+
 
 class GenerationError(Exception):
     pass
