@@ -322,6 +322,12 @@ select {
 .file-drop .ico { width: 20px; height: 20px; color: var(--muted-2); }
 .file-drop:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-50); }
 .file-drop:hover .ico { color: var(--blue); }
+.file-drop.dragover {
+  border-color: var(--blue); color: var(--blue); background: var(--blue-50);
+  border-style: solid; transform: scale(1.01);
+}
+.file-drop.dragover .ico { color: var(--blue); }
+.file-drop * { pointer-events: none; }  /* حتى لا تبتلع العناصر الداخلية أحداث السحب */
 
 /* ===== النافذة المنبثقة ===== */
 .overlay {

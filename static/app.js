@@ -199,8 +199,25 @@ function wireModelPills(id, stateObj) {
   });
 }
 function wireDrop(dropId, inputId, countId) {
+  const drop = document.getElementById(dropId);
   const input = document.getElementById(inputId);
-  document.getElementById(dropId).addEventListener("click", () => input.click());
+  drop.addEventListener("click", () => input.click());
+
+  // السحب والإفلات
+  ["dragenter", "dragover"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("dragover"); })
+  );
+  ["dragleave", "dragend", "drop"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("dragover"); })
+  );
+  drop.addEventListener("drop", (e) => {
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (files && files.length) {
+      input.files = files;                          // نمرّر الملفات المسحوبة للحقل
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+
   if (countId) input.addEventListener("change", () => {
     document.getElementById(countId).textContent =
       input.files.length ? `${input.files.length} صورة مختارة` : "";
@@ -266,7 +283,7 @@ function viewDesignMode() {
       <div class="studio">
         <div>
           <label>صورة العيّنة</label>
-          <div class="file-drop" id="d-drop">${icon("upload")}<span>اختر صورة منتج للتجربة</span></div>
+          <div class="file-drop" id="d-drop">${icon("upload")}<span>اسحب صورة المنتج هنا أو اضغط للاختيار</span></div>
           <input type="file" id="d-sample" accept="image/*" class="hidden">
           <div id="d-sample-name" class="page-sub"></div>
 
@@ -299,7 +316,7 @@ function viewDesignMode() {
       <label>اسم الدفعة</label>
       <input type="text" id="d-batch-name" placeholder="مثال: منتجات أكتوبر">
       <label>صور المنتجات (20-50 صورة)</label>
-      <div class="file-drop" id="d-batch-drop">${icon("upload")}<span>اضغط لاختيار صور المنتجات</span></div>
+      <div class="file-drop" id="d-batch-drop">${icon("upload")}<span>اسحب صور المنتجات هنا أو اضغط للاختيار</span></div>
       <input type="file" id="d-batch-files" multiple accept="image/*" class="hidden">
       <div id="d-batch-count" class="page-sub"></div>
       <button class="btn" id="d-run" onclick="designRun()">${icon("play")}<span>ابدأ التوليد على الكل</span></button>
@@ -422,7 +439,7 @@ async function viewReferenceMode() {
 
       <div id="r-ref-block">
         <label>الصورة المرجعية</label>
-        <div class="file-drop" id="r-ref-drop">${icon("upload")}<span>اختر الصورة المرجعية</span></div>
+        <div class="file-drop" id="r-ref-drop">${icon("upload")}<span>اسحب الصورة المرجعية هنا أو اضغط للاختيار</span></div>
         <input type="file" id="r-ref" accept="image/*" class="hidden">
         <div id="r-ref-name" class="page-sub"></div>
       </div>
@@ -437,7 +454,7 @@ async function viewReferenceMode() {
       ${lockToggle("r-lock")}
 
       <label>صور المنتجات (20-50 صورة)</label>
-      <div class="file-drop" id="r-drop">${icon("upload")}<span>اضغط لاختيار صور المنتجات</span></div>
+      <div class="file-drop" id="r-drop">${icon("upload")}<span>اسحب صور المنتجات هنا أو اضغط للاختيار</span></div>
       <input type="file" id="r-files" multiple accept="image/*" class="hidden">
       <div id="r-count" class="page-sub"></div>
 
@@ -782,7 +799,7 @@ async function viewTemplates() {
       <label>اسم القالب</label>
       <input type="text" id="t-name" placeholder="مثال: خلفية بيضاء استوديو">
       <label>الصورة المرجعية (اختيارية)</label>
-      <div class="file-drop" id="t-drop">${icon("upload")}<span>اختر الصورة المرجعية</span></div>
+      <div class="file-drop" id="t-drop">${icon("upload")}<span>اسحب الصورة المرجعية هنا أو اضغط للاختيار</span></div>
       <input type="file" id="t-ref" accept="image/*" class="hidden">
       <div id="t-ref-name" class="page-sub"></div>
       <label>البرومبت</label>
@@ -894,6 +911,13 @@ function escapeHtml(s) {
   return (s || "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+
+// منع المتصفح من فتح الصورة عند إفلاتها خارج منطقة الرفع
+["dragover", "drop"].forEach((ev) =>
+  window.addEventListener(ev, (e) => {
+    if (!e.target.closest || !e.target.closest(".file-drop")) e.preventDefault();
+  })
+);
 
 // إغلاق النافذة بالضغط خارجها
 document.getElementById("overlay").addEventListener("click", (e) => {
