@@ -510,8 +510,9 @@ async function renderBatch() {
       </div>
       <div class="row" style="flex:0">
         <button class="btn ghost" onclick="navigate('batches')">${icon("arrowRight")}<span>رجوع</span></button>
+        <button class="btn ghost" onclick="navigate('new-batch')">${icon("edit")}<span>صفحة البرومبت</span></button>
         <button class="btn danger" onclick="deleteBatch(${b.id})">${icon("trash")}<span>حذف</span></button>
-        <a class="btn" href="/api/batches/${b.id}/download">${icon("download")}<span>تحميل الكل</span></a>
+        <button class="btn" onclick="downloadAllImages(${b.id})">${icon("download")}<span>تحميل الصور</span></button>
       </div>
     </div>
     <div class="card recipe">
@@ -537,6 +538,24 @@ async function renderBatch() {
 }
 
 function qualityLabel(q) { return { high: "عالية", medium: "متوسطة", low: "سريعة" }[q] || q || "عالية"; }
+
+// تحميل كل صورة على حدة (بدون ملف مضغوط)
+async function downloadAllImages(bid) {
+  const b = await api(`/api/batches/${bid}`);
+  const done = b.images.filter((i) => i.result);
+  if (!done.length) return toast("لا توجد صور جاهزة للتحميل");
+  toast(`جارِ تحميل ${done.length} صورة…`);
+  const base = (b.name || "صورة").replace(/[\\/:*?"<>|]/g, "_");
+  for (let i = 0; i < done.length; i++) {
+    const a = document.createElement("a");
+    a.href = `/media/result/${done[i].result}`;
+    a.download = `${base}-${i + 1}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    await new Promise((r) => setTimeout(r, 500)); // فاصل بسيط بين كل تحميل
+  }
+}
 
 async function copyPrompt(text) {
   try { await navigator.clipboard.writeText(text || ""); toast("تم نسخ البرومبت"); }
