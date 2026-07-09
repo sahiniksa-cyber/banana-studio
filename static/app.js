@@ -231,9 +231,10 @@ function qualityNote(id) {
 }
 function lockToggle(id) {
   return `<label class="check-row" style="margin:6px 0 16px">
-      <input type="checkbox" id="${id}" checked>
-      <span><b>قفل شكل المنتج</b> — منتجك يبقى مطابقًا 100% (الذكاء يغيّر الخلفية فقط).
-      <br>أطفئه لمظهر <b>طبيعي أكثر كأنه من ChatGPT</b> (قد يغيّر المنتج بسيط).</span>
+      <input type="checkbox" id="${id}">
+      <span><b>قفل شكل المنتج</b> (اختياري) — فعّله فقط للمنتجات الصغيرة اللي تبيها
+      <b>مطابقة 100%</b>. <br>الافتراضي: مظهر <b>طبيعي كأنه من ChatGPT</b> (الأمر يُطبَّق كاملًا) —
+      وهو الأنسب للمنتجات اللي تملأ الصورة.</span>
     </label>`;
 }
 

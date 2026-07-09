@@ -207,7 +207,7 @@ def api_create_batch():
     prompt = request.form.get("prompt", "").strip() or None
     aspect = request.form.get("aspect") or None
     quality = request.form.get("quality") or None
-    lock_subject = request.form.get("lock", "1") == "1"  # قفل المنتج (افتراضيًا مفعّل)
+    lock_subject = request.form.get("lock", "0") == "1"  # قفل المنتج (افتراضيًا مطفأ = مظهر طبيعي)
 
     # المرجع: إمّا ملف مرفوع، أو اسم ملف محفوظ مسبقًا (من جلسة تصميم الوضع "أ")
     reference = None
@@ -335,7 +335,7 @@ def api_design():
     prompt = request.form.get("prompt", "").strip()
     aspect = request.form.get("aspect") or None
     quality = request.form.get("quality") or None
-    lock = request.form.get("lock", "1") == "1"
+    lock = request.form.get("lock", "0") == "1"
     if not prompt:
         return jsonify({"error": "اكتب برومبت التصميم"}), 400
 
