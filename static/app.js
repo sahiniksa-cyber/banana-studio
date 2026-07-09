@@ -27,6 +27,7 @@ const ICONS = {
   cpu: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>',
   upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
   layers: '<path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>',
+  x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
 };
 
 function icon(name, cls = "ico") {
@@ -198,12 +199,15 @@ function wireModelPills(id, stateObj) {
     });
   });
 }
-function wireDrop(dropId, inputId, countId) {
+// ===== نظام اختيار الصور مع معاينة مصغّرة وحذف =====
+const PICK = {};  // inputId -> { files:[], previewId, multiple }
+
+function wireDrop(dropId, inputId, previewId, multiple) {
   const drop = document.getElementById(dropId);
   const input = document.getElementById(inputId);
-  drop.addEventListener("click", () => input.click());
+  PICK[inputId] = { files: [], previewId, multiple: !!multiple };
 
-  // السحب والإفلات
+  drop.addEventListener("click", () => input.click());
   ["dragenter", "dragover"].forEach((ev) =>
     drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("dragover"); })
   );
@@ -211,17 +215,46 @@ function wireDrop(dropId, inputId, countId) {
     drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("dragover"); })
   );
   drop.addEventListener("drop", (e) => {
-    const files = e.dataTransfer && e.dataTransfer.files;
-    if (files && files.length) {
-      input.files = files;                          // نمرّر الملفات المسحوبة للحقل
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-    }
+    if (e.dataTransfer && e.dataTransfer.files.length) addPicked(inputId, e.dataTransfer.files);
   });
+  input.addEventListener("change", () => addPicked(inputId, input.files));
+}
 
-  if (countId) input.addEventListener("change", () => {
-    document.getElementById(countId).textContent =
-      input.files.length ? `${input.files.length} صورة مختارة` : "";
-  });
+function _isImage(f) {
+  return (f.type || "").startsWith("image/") ||
+    /\.(png|jpe?g|webp|heic|heif|bmp|tiff?|gif|avif)$/i.test(f.name || "");
+}
+function addPicked(inputId, fileList) {
+  const st = PICK[inputId];
+  if (!st) return;
+  const incoming = Array.from(fileList).filter(_isImage);
+  st.files = st.multiple ? st.files.concat(incoming) : incoming.slice(0, 1);
+  _syncPick(inputId);
+  renderPick(inputId);
+}
+function removePicked(inputId, idx) {
+  const st = PICK[inputId];
+  if (!st) return;
+  st.files.splice(idx, 1);
+  _syncPick(inputId);
+  renderPick(inputId);
+}
+function _syncPick(inputId) {
+  const st = PICK[inputId];
+  const dt = new DataTransfer();
+  st.files.forEach((f) => dt.items.add(f));
+  document.getElementById(inputId).files = dt.files;  // لا يُطلق حدث change
+}
+function renderPick(inputId) {
+  const st = PICK[inputId];
+  const el = document.getElementById(st.previewId);
+  if (!el) return;
+  el.className = "thumbs";
+  el.innerHTML = st.files.map((f, i) => `
+    <div class="thumb-item">
+      <img src="${URL.createObjectURL(f)}" alt="">
+      <button class="thumb-x" onclick="removePicked('${inputId}',${i})" title="حذف">${icon("x")}</button>
+    </div>`).join("");
 }
 
 // خيارات المقاس والجودة
@@ -285,7 +318,7 @@ function viewDesignMode() {
           <label>صورة العيّنة</label>
           <div class="file-drop" id="d-drop">${icon("upload")}<span>اسحب صورة المنتج هنا أو اضغط للاختيار</span></div>
           <input type="file" id="d-sample" accept="image/*" class="hidden">
-          <div id="d-sample-name" class="page-sub"></div>
+          <div id="d-sample-prev"></div>
 
           <label>المقاس / نسبة الأبعاد</label>
           ${choicePills("d-aspect", ASPECTS, "1:1", true)}
@@ -318,18 +351,15 @@ function viewDesignMode() {
       <label>صور المنتجات (20-50 صورة)</label>
       <div class="file-drop" id="d-batch-drop">${icon("upload")}<span>اسحب صور المنتجات هنا أو اضغط للاختيار</span></div>
       <input type="file" id="d-batch-files" multiple accept="image/*" class="hidden">
-      <div id="d-batch-count" class="page-sub"></div>
+      <div id="d-batch-prev"></div>
       <button class="btn" id="d-run" onclick="designRun()">${icon("play")}<span>ابدأ التوليد على الكل</span></button>
     </div>`;
 
   design.model = "gpt_image";
   wireChoicePills("d-aspect", design, "aspect", "1:1");
   wireChoicePills("d-quality", design, "quality", "high");
-  wireDrop("d-drop", "d-sample", null);
-  document.getElementById("d-sample").addEventListener("change", (e) => {
-    document.getElementById("d-sample-name").textContent = e.target.files[0]?.name || "";
-  });
-  wireDrop("d-batch-drop", "d-batch-files", "d-batch-count");
+  wireDrop("d-drop", "d-sample", "d-sample-prev", false);
+  wireDrop("d-batch-drop", "d-batch-files", "d-batch-prev", true);
 
   // إعادة استخدام إعدادات دفعة سابقة (إن وُجدت)
   if (PREFILL) {
@@ -420,7 +450,7 @@ async function designRun() {
 const refMode = {};
 async function viewReferenceMode() {
   const templates = await api("/api/templates");
-  Object.assign(refMode, { model: "nano_banana" });
+  Object.assign(refMode, { model: "gpt_image" });
   main.innerHTML = `
     <button class="back-link" onclick="viewNewBatch()">${icon("arrowRight")}<span>رجوع لاختيار الوضع</span></button>
     ${noKeyBanner()}
@@ -441,7 +471,7 @@ async function viewReferenceMode() {
         <label>الصورة المرجعية</label>
         <div class="file-drop" id="r-ref-drop">${icon("upload")}<span>اسحب الصورة المرجعية هنا أو اضغط للاختيار</span></div>
         <input type="file" id="r-ref" accept="image/*" class="hidden">
-        <div id="r-ref-name" class="page-sub"></div>
+        <div id="r-ref-prev"></div>
       </div>
 
       <label>المقاس / نسبة الأبعاد</label>
@@ -456,7 +486,7 @@ async function viewReferenceMode() {
       <label>صور المنتجات (20-50 صورة)</label>
       <div class="file-drop" id="r-drop">${icon("upload")}<span>اسحب صور المنتجات هنا أو اضغط للاختيار</span></div>
       <input type="file" id="r-files" multiple accept="image/*" class="hidden">
-      <div id="r-count" class="page-sub"></div>
+      <div id="r-prev"></div>
 
       <button class="btn" id="r-run" onclick="refRun()">${icon("play")}<span>ابدأ التوليد على الكل</span></button>
     </div>`;
@@ -464,11 +494,8 @@ async function viewReferenceMode() {
   refMode.model = "gpt_image";
   wireChoicePills("r-aspect", refMode, "aspect", "1:1");
   wireChoicePills("r-quality", refMode, "quality", "high");
-  wireDrop("r-ref-drop", "r-ref", null);
-  document.getElementById("r-ref").addEventListener("change", (e) => {
-    document.getElementById("r-ref-name").textContent = e.target.files[0]?.name || "";
-  });
-  wireDrop("r-drop", "r-files", "r-count");
+  wireDrop("r-ref-drop", "r-ref", "r-ref-prev", false);
+  wireDrop("r-drop", "r-files", "r-prev", true);
 }
 
 function onRefTemplateChange() {
@@ -801,18 +828,14 @@ async function viewTemplates() {
       <label>الصورة المرجعية (اختيارية)</label>
       <div class="file-drop" id="t-drop">${icon("upload")}<span>اسحب الصورة المرجعية هنا أو اضغط للاختيار</span></div>
       <input type="file" id="t-ref" accept="image/*" class="hidden">
-      <div id="t-ref-name" class="page-sub"></div>
+      <div id="t-ref-prev"></div>
       <label>البرومبت</label>
       <textarea id="t-prompt" placeholder="صف الأسلوب المطلوب تطبيقه على كل الصور…"></textarea>
       <button class="btn" onclick="createTemplate()">${icon("save")}<span>حفظ القالب</span></button>
     </div>
     <div id="templates-list" class="grid-cards"></div>`;
 
-  const refInput = document.getElementById("t-ref");
-  document.getElementById("t-drop").addEventListener("click", () => refInput.click());
-  refInput.addEventListener("change", () => {
-    document.getElementById("t-ref-name").textContent = refInput.files[0]?.name || "";
-  });
+  wireDrop("t-drop", "t-ref", "t-ref-prev", false);
   loadTemplates();
 }
 
@@ -846,7 +869,7 @@ async function createTemplate() {
     toast("تم حفظ القالب");
     document.getElementById("t-name").value = "";
     document.getElementById("t-prompt").value = "";
-    document.getElementById("t-ref-name").textContent = "";
+    if (PICK["t-ref"]) { PICK["t-ref"].files = []; _syncPick("t-ref"); renderPick("t-ref"); }
     loadTemplates();
   } catch (e) { toast(e.message); }
 }
