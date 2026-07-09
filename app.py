@@ -16,6 +16,14 @@ from flask import (
     abort,
 )
 from werkzeug.utils import secure_filename
+from PIL import Image
+
+# دعم صور آيفون HEIC/HEIF (اختياري — إن توفّرت المكتبة)
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except Exception:  # noqa: BLE001
+    pass
 
 import store
 import generator
@@ -38,7 +46,12 @@ store.init_db(DB_FILE)
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200MB للدفعة
 
-ALLOWED = {"png", "jpg", "jpeg", "webp"}
+ALLOWED = {"png", "jpg", "jpeg", "webp", "heic", "heif", "bmp", "tiff", "tif", "gif", "avif"}
+
+
+@app.errorhandler(ValueError)
+def _handle_value_error(e):
+    return jsonify({"error": str(e)}), 400
 
 # توضيح أدوار الصور للموديل: الصورة الأولى = المنتج المطلوب الحفاظ عليه،
 # الصورة الثانية (إن وُجدت) = مرجع للأسلوب فقط.
@@ -78,9 +91,14 @@ def _allowed(fn):
 
 
 def _save_upload(file_storage):
-    ext = file_storage.filename.rsplit(".", 1)[1].lower()
-    name = f"{uuid.uuid4().hex}.{ext}"
-    file_storage.save(UPLOAD_DIR / name)
+    """يحفظ أي صورة (HEIC/WEBP/JPG/…) بعد تحويلها إلى PNG موحّد."""
+    name = f"{uuid.uuid4().hex}.png"
+    try:
+        img = Image.open(file_storage.stream)
+        img = img.convert("RGBA") if img.mode in ("RGBA", "LA") else img.convert("RGB")
+        img.save(UPLOAD_DIR / name, "PNG")
+    except Exception as e:  # noqa: BLE001
+        raise ValueError("تعذّر قراءة الصورة. جرّب صيغة PNG أو JPG أو HEIC.") from e
     return name
 
 
