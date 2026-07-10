@@ -11,6 +11,7 @@ import base64
 import io
 import logging
 import mimetypes
+import re
 import time
 import requests
 from PIL import Image, ImageFilter, ImageDraw, ImageOps
@@ -19,8 +20,22 @@ _log = logging.getLogger(__name__)
 _RETRY_CODES = {429, 500, 502, 503, 504}  # ضغط/أخطاء مؤقتة → نعيد المحاولة
 
 
-def _post_with_retry(url, headers, data, files_factory, attempts=5):
-    """POST مع إعادة محاولة عند الضغط (429) أو الأخطاء المؤقتة، مع تراجع تصاعدي.
+def _retry_after(resp, default):
+    """يستخرج وقت الانتظار الذي يطلبه OpenAI (رأس Retry-After أو "try again in 12s")."""
+    ra = resp.headers.get("retry-after")
+    if ra:
+        try:
+            return float(ra)
+        except ValueError:
+            pass
+    m = re.search(r"try again in ([\d.]+)\s*s", resp.text or "")
+    if m:
+        return float(m.group(1)) + 1
+    return default
+
+
+def _post_with_retry(url, headers, data, files_factory, attempts=8):
+    """POST مع إعادة محاولة تحترم حد OpenAI (429): تنتظر بالضبط ما يطلبه بدل الفشل.
 
     files_factory(): دالة تُرجع قائمة الملفات جديدة في كل محاولة (لأن التيّارات تُستهلك).
     """
@@ -35,7 +50,9 @@ def _post_with_retry(url, headers, data, files_factory, attempts=5):
                 try: fh.close()
                 except Exception: pass
         if resp.status_code in _RETRY_CODES and i < attempts - 1:
-            time.sleep(min(4 * (2 ** i), 30))  # 4,8,16,30…
+            base = min(4 * (2 ** i), 20)
+            wait = _retry_after(resp, base) if resp.status_code == 429 else base
+            time.sleep(min(max(wait, 1), 60))
             continue
         break
     return resp

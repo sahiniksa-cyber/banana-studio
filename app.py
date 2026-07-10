@@ -289,7 +289,7 @@ def _text_key():
     return _model_key("gpt_image")
 
 
-_BATCH_WORKERS = int(os.environ.get("BATCH_WORKERS", "10"))  # صور تُعالج بالتوازي
+_BATCH_WORKERS = int(os.environ.get("BATCH_WORKERS", "3"))  # صور بالتوازي (يناسب حد OpenAI المنخفض)
 
 
 def _process_images(batch, images):
