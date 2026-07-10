@@ -431,6 +431,8 @@ def api_regenerate(iid):
     store.update_image(iid, status="running", custom_prompt=custom_prompt or None)
     try:
         if custom_prompt:
+            # التعديل تجربة سريعة → جودة سريعة (الجودة العالية تستغرق دقائق)
+            edit_q = "low"
             if mask_file and mask_file.filename:
                 # تحرير منطقة محددة عبر قناع OpenAI الأصلي (يفهم المنطقة ويدمجها)
                 mask_name = f"mask_{uuid.uuid4().hex}.png"
@@ -438,21 +440,19 @@ def api_regenerate(iid):
                 mprompt = MASK_EDIT_INSTRUCTION.format(edit=custom_prompt)
                 if _is_gpt(batch["model"]):
                     out = generator.generate_masked_openai(
-                        api_key, mprompt, current, UPLOAD_DIR / mask_name,
-                        quality=batch.get("quality"),
+                        api_key, mprompt, current, UPLOAD_DIR / mask_name, quality=edit_q,
                     )
                 else:  # احتياطي لغير OpenAI: دمج محلي
                     out = generator.generate_region(
                         batch["model"], api_key, mprompt, current, None,
                         UPLOAD_DIR / mask_name, current,
-                        aspect=batch.get("aspect"), quality=batch.get("quality"),
+                        aspect=batch.get("aspect"), quality=edit_q,
                     )
             else:
                 # تعديل موجّه على كامل الصورة الحالية (بدون تحديد)
                 out = generator.generate(
                     batch["model"], api_key, EDIT_INSTRUCTION.format(edit=custom_prompt),
-                    current, None,
-                    aspect=batch.get("aspect"), quality=batch.get("quality"),
+                    current, None, aspect=batch.get("aspect"), quality=edit_q,
                 )
         else:
             # بدون أمر: إعادة تطبيق وصفة الدفعة على الصورة الأصلية
