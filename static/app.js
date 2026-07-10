@@ -553,19 +553,22 @@ function stopPoll() {
 async function renderBatch() {
   const b = await api(`/api/batches/${currentBatchId}`);
   main.innerHTML = `
-    <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:22px">
+    <div class="batch-head">
       <div>
         <div class="page-title" style="margin-bottom:2px">${escapeHtml(b.name)}</div>
         <div class="page-sub" style="margin-bottom:0">القالب: ${escapeHtml(b.template_name || "بدون")} ·
           ${modelLabel(b.model)}</div>
       </div>
-      <div class="row" style="flex:0">
+      <div class="batch-actions">
         <button class="btn ghost" onclick="navigate('batches')">${icon("arrowRight")}<span>رجوع</span></button>
         <button class="btn ghost" onclick="reuseBatch(${b.id})">${icon("edit")}<span>صفحة البرومبت</span></button>
-        <button class="btn danger" onclick="deleteBatch(${b.id})">${icon("trash")}<span>حذف</span></button>
+        <button class="btn ghost" onclick="document.getElementById('add-images-input').click()">${icon("plus")}<span>أضف صور</span></button>
         <button class="btn" onclick="downloadAllImages(${b.id})">${icon("download")}<span>تحميل الصور</span></button>
+        <button class="btn danger" onclick="deleteBatch(${b.id})">${icon("trash")}<span>حذف</span></button>
       </div>
     </div>
+    <input type="file" id="add-images-input" multiple accept="image/*" class="hidden"
+      onchange="addImagesToBatch(${b.id}, this.files)">
     <div class="card recipe">
       <div class="recipe-head">
         <b>الوصفة (البرومبت + الخيارات)</b>
@@ -586,6 +589,18 @@ async function renderBatch() {
     </div>
     <div class="image-grid" id="img-grid"></div>`;
   renderBatchImages();
+}
+
+async function addImagesToBatch(bid, fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append("images", f);
+  try {
+    const r = await api(`/api/batches/${bid}/add-images`, { method: "POST", body: fd });
+    toast(`تمت إضافة ${r.added} صورة — تُعالج بنفس البرومبت`);
+    if (currentBatchId === bid) { ensurePoll(); renderBatchImages(); }
+  } catch (e) { toast(e.message); }
 }
 
 function qualityLabel(q) { return { high: "عالية", medium: "متوسطة", low: "سريعة" }[q] || q || "عالية"; }

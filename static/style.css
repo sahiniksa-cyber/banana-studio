@@ -429,6 +429,14 @@ select {
   background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 5px; padding: 1px 6px; font-size: 0.85em; direction: ltr; display: inline-block;
 }
+/* ===== رأس صفحة الدفعة وأزرارها ===== */
+.batch-head {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 16px; flex-wrap: wrap; margin-bottom: 22px;
+}
+.batch-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.batch-actions .btn { flex: 0 0 auto; }
+
 /* ===== لوحة الوصفة في تفاصيل الدفعة ===== */
 .recipe { margin-bottom: 22px; }
 .recipe-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }

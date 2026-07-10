@@ -275,33 +275,25 @@ def _text_key():
     return _model_key("gpt_image")
 
 
-def _process_batch(bid):
-    batch = store.get_batch(bid)
-    if not batch:
-        return
-    store.set_batch_status(bid, "running")
+def _process_images(batch, images):
+    """يعالج قائمة صور بنفس وصفة الدفعة (يُستخدم للدفعة الأولى ولإضافة صور لاحقًا)."""
     api_key = _model_key(batch["model"])
     reference = _ref_path(batch.get("reference"))
-    # تحسين البرومبت مرة واحدة للدفعة (مثل ChatGPT) — للوضع غير الصارم فقط
     raw = batch.get("prompt")
     if raw and not batch.get("strict"):
-        raw = generator.enhance_prompt(raw, _text_key())
+        raw = generator.enhance_prompt(raw, _text_key())  # تحسين مرة واحدة
     prompt = build_prompt(raw, reference is not None, batch.get("strict"))
     lock = bool(batch.get("lock_subject"))
 
-    for img in store.list_images(bid):
+    for img in images:
         store.update_image(img["id"], status="running")
         try:
             out = generator.generate(
-                batch["model"],
-                api_key,
-                prompt,
-                UPLOAD_DIR / img["original"],
-                reference,
-                aspect=batch.get("aspect"),
-                quality=batch.get("quality"),
+                batch["model"], api_key, prompt,
+                UPLOAD_DIR / img["original"], reference,
+                aspect=batch.get("aspect"), quality=batch.get("quality"),
             )
-            if lock:  # قفل المنتج (اختياري): يحفظ شكل المنتج تمامًا
+            if lock:
                 out = generator.lock_subject(UPLOAD_DIR / img["original"], out)
             result_name = f"{uuid.uuid4().hex}.png"
             (RESULT_DIR / result_name).write_bytes(out)
@@ -309,6 +301,22 @@ def _process_batch(bid):
         except Exception as e:  # noqa: BLE001
             store.update_image(img["id"], status="failed", error=str(e)[:400])
 
+
+def _process_batch(bid):
+    batch = store.get_batch(bid)
+    if not batch:
+        return
+    store.set_batch_status(bid, "running")
+    _process_images(batch, store.list_images(bid))
+    store.set_batch_status(bid, "done")
+
+
+def _process_added(bid, image_ids):
+    batch = store.get_batch(bid)
+    if not batch:
+        return
+    store.set_batch_status(bid, "running")
+    _process_images(batch, [store.get_image(i) for i in image_ids])
     store.set_batch_status(bid, "done")
 
 
@@ -325,6 +333,22 @@ def api_get_batch(bid):
 def api_delete_batch(bid):
     store.delete_batch(bid)
     return jsonify({"ok": True})
+
+
+@app.route("/api/batches/<int:bid>/add-images", methods=["POST"])
+def api_add_images(bid):
+    """إضافة صور جديدة لدفعة موجودة ومعالجتها بنفس البرومبت والإعدادات."""
+    batch = store.get_batch(bid)
+    if not batch:
+        abort(404)
+    files = request.files.getlist("images")
+    files = [f for f in files if f.filename and _allowed(f.filename)]
+    if not files:
+        return jsonify({"error": "ارفع صورة واحدة على الأقل"}), 400
+    new_ids = [store.add_image(bid, _save_upload(f)) for f in files]
+    store.set_batch_status(bid, "running")
+    threading.Thread(target=_process_added, args=(bid, new_ids), daemon=True).start()
+    return jsonify({"ok": True, "added": len(new_ids)})
 
 
 @app.route("/api/batches/<int:bid>/download")
