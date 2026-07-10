@@ -12,7 +12,7 @@ import io
 import logging
 import mimetypes
 import requests
-from PIL import Image, ImageFilter, ImageDraw
+from PIL import Image, ImageFilter, ImageDraw, ImageOps
 
 _log = logging.getLogger(__name__)
 
@@ -139,6 +139,45 @@ def _to_png_bytes(im):
     buf = io.BytesIO()
     im.save(buf, "PNG")
     return buf.getvalue()
+
+
+def generate_masked_openai(api_key, prompt, image_path, frontend_mask_path, quality=None):
+    """تحرير المنطقة المحددة فقط عبر قناع OpenAI الأصلي (inpainting طبيعي).
+
+    الذكاء يعدّل داخل المنطقة ويدمجها مع باقي الصورة تلقائيًا.
+    نوسّع القناع وننعّمه قليلًا حتى يفهم المنطقة لا يأخذها بالملي.
+    """
+    if not api_key:
+        raise GenerationError(NO_KEY_MSG)
+    img = Image.open(image_path).convert("RGBA")
+    fm = Image.open(frontend_mask_path).convert("L").resize(img.size)  # أبيض = محدد
+    fm = fm.filter(ImageFilter.MaxFilter(9))       # توسيع المنطقة
+    fm = fm.filter(ImageFilter.GaussianBlur(6))    # تنعيم الحواف (لا تحديد حاد)
+    # قناع OpenAI: شفاف حيث التحديد (يُحرَّر)، معتم في الباقي (يُحفَظ)
+    alpha = ImageOps.invert(fm)
+    mask_img = Image.new("RGBA", img.size, (0, 0, 0, 255))
+    mask_img.putalpha(alpha)
+
+    img_buf = io.BytesIO(); img.save(img_buf, "PNG"); img_buf.seek(0)
+    mask_buf = io.BytesIO(); mask_img.save(mask_buf, "PNG"); mask_buf.seek(0)
+
+    data = {"model": GPT_IMAGE_MODEL, "prompt": prompt}
+    if quality in _VALID_QUALITY:
+        data["quality"] = quality
+    resp = requests.post(
+        "https://api.openai.com/v1/images/edits",
+        headers={"Authorization": f"Bearer {api_key}"},
+        data=data,
+        files=[("image", ("image.png", img_buf, "image/png")),
+               ("mask", ("mask.png", mask_buf, "image/png"))],
+        timeout=_TIMEOUT,
+    )
+    if resp.status_code != 200:
+        raise GenerationError(f"OpenAI خطأ {resp.status_code}: {resp.text[:300]}")
+    try:
+        return base64.b64decode(resp.json()["data"][0]["b64_json"])
+    except (KeyError, IndexError):
+        raise GenerationError("OpenAI لم يُرجع صورة. الرد: " + resp.text[:300])
 
 
 # ---------- قفل المنتج (ضمان عدم تغيّر شكل المنتج في الكود) ----------

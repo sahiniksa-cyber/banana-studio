@@ -72,6 +72,12 @@ STRICT_INSTRUCTION = (
 )
 
 
+# تعليمة تحرير المنطقة المحددة (مع قناع): يصف محتوى المنطقة ويطلب الدمج الطبيعي.
+MASK_EDIT_INSTRUCTION = (
+    "عدّل المنطقة المحددة فقط لتصبح: {edit}. اجعلها طبيعية ومتجانسة تمامًا مع باقي "
+    "الصورة في الإضاءة والألوان والمنظور."
+)
+
 # تعليمة التعديل الموجّه: يطبّق أمر المستخدم فقط ويحافظ على بقية الصورة كما هي.
 EDIT_INSTRUCTION = (
     "هذه صورة جاهزة. طبّق التعديل التالي فقط، مع الحفاظ التام على بقية الصورة "
@@ -401,20 +407,27 @@ def api_regenerate(iid):
     store.update_image(iid, status="running", custom_prompt=custom_prompt or None)
     try:
         if custom_prompt:
-            # تعديل موجّه: نطبّق أمر المستخدم حرفيًا على الصورة الحالية فقط
-            # (بدون تحسين/توسيع، وبدون مرجع، وبدون قفل) حتى لا يعيد رسم كل شيء
-            prompt = EDIT_INSTRUCTION.format(edit=custom_prompt)
             if mask_file and mask_file.filename:
+                # تحرير منطقة محددة عبر قناع OpenAI الأصلي (يفهم المنطقة ويدمجها)
                 mask_name = f"mask_{uuid.uuid4().hex}.png"
                 mask_file.save(UPLOAD_DIR / mask_name)
-                out = generator.generate_region(
-                    batch["model"], api_key, prompt, current, None,
-                    UPLOAD_DIR / mask_name, current,
-                    aspect=batch.get("aspect"), quality=batch.get("quality"),
-                )
+                mprompt = MASK_EDIT_INSTRUCTION.format(edit=custom_prompt)
+                if _is_gpt(batch["model"]):
+                    out = generator.generate_masked_openai(
+                        api_key, mprompt, current, UPLOAD_DIR / mask_name,
+                        quality=batch.get("quality"),
+                    )
+                else:  # احتياطي لغير OpenAI: دمج محلي
+                    out = generator.generate_region(
+                        batch["model"], api_key, mprompt, current, None,
+                        UPLOAD_DIR / mask_name, current,
+                        aspect=batch.get("aspect"), quality=batch.get("quality"),
+                    )
             else:
+                # تعديل موجّه على كامل الصورة الحالية (بدون تحديد)
                 out = generator.generate(
-                    batch["model"], api_key, prompt, current, None,
+                    batch["model"], api_key, EDIT_INSTRUCTION.format(edit=custom_prompt),
+                    current, None,
                     aspect=batch.get("aspect"), quality=batch.get("quality"),
                 )
         else:
