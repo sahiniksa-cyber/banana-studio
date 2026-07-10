@@ -11,13 +11,38 @@ import base64
 import io
 import logging
 import mimetypes
+import os
 import re
+import threading
 import time
 import requests
 from PIL import Image, ImageFilter, ImageDraw, ImageOps
 
 _log = logging.getLogger(__name__)
 _RETRY_CODES = {429, 500, 502, 503, 504}  # ضغط/أخطاء مؤقتة → نعيد المحاولة
+
+# ===== منظّم المعدّل: يحترم حد OpenAI (صور مدخلة/دقيقة) تلقائيًا =====
+_RL_LIMIT = int(os.environ.get("OPENAI_IMAGES_PER_MIN", "5"))  # حد الحساب (Tier 1 = 5)
+_RL_WINDOW = 60.0
+_RL_LOCK = threading.Lock()
+_RL_TIMES = []  # أوقات إرسال الصور المدخلة الأخيرة
+
+
+def _rate_acquire(n=1):
+    """ينتظر حتى يتوفّر مجال لإرسال n صورة مدخلة ضمن حد الدقيقة (يمنع 429)."""
+    if _RL_LIMIT <= 0:
+        return
+    while True:
+        with _RL_LOCK:
+            now = time.time()
+            cutoff = now - _RL_WINDOW
+            while _RL_TIMES and _RL_TIMES[0] < cutoff:
+                _RL_TIMES.pop(0)
+            if len(_RL_TIMES) + n <= _RL_LIMIT or not _RL_TIMES:
+                _RL_TIMES.extend([now] * n)
+                return
+            wait = _RL_TIMES[0] + _RL_WINDOW - now
+        time.sleep(min(max(wait, 0.5), _RL_WINDOW))
 
 
 def _retry_after(resp, default):
@@ -34,11 +59,13 @@ def _retry_after(resp, default):
     return default
 
 
-def _post_with_retry(url, headers, data, files_factory, attempts=8):
-    """POST مع إعادة محاولة تحترم حد OpenAI (429): تنتظر بالضبط ما يطلبه بدل الفشل.
+def _post_with_retry(url, headers, data, files_factory, attempts=8, n_images=1):
+    """POST مع تنظيم معدّل مسبق + إعادة محاولة تحترم حد OpenAI (429).
 
     files_factory(): دالة تُرجع قائمة الملفات جديدة في كل محاولة (لأن التيّارات تُستهلك).
+    n_images: عدد الصور المدخلة في الطلب (لحساب حد الدقيقة).
     """
+    _rate_acquire(n_images)  # ينتظر دوره ضمن حد الدقيقة قبل الإرسال
     resp = None
     for i in range(attempts):
         fhs = []
@@ -224,7 +251,7 @@ def generate_masked_openai(api_key, prompt, image_path, frontend_mask_path, qual
 
     resp = _post_with_retry(
         "https://api.openai.com/v1/images/edits",
-        {"Authorization": f"Bearer {api_key}"}, data, _files,
+        {"Authorization": f"Bearer {api_key}"}, data, _files, n_images=1,
     )
     if resp.status_code != 200:
         raise GenerationError(f"OpenAI خطأ {resp.status_code}: {resp.text[:300]}")
@@ -372,7 +399,8 @@ def _generate_openai(api_key, prompt, input_path, references=None, aspect=None, 
             out.append(("image[]", (str(p).replace("\\", "/").split("/")[-1], fh, _guess_mime(p))))
         return out
 
-    resp = _post_with_retry(url, {"Authorization": f"Bearer {api_key}"}, data, _files)
+    resp = _post_with_retry(url, {"Authorization": f"Bearer {api_key}"}, data, _files,
+                            n_images=len(paths))
 
     if resp.status_code != 200:
         raise GenerationError(f"OpenAI خطأ {resp.status_code}: {resp.text[:300]}")
