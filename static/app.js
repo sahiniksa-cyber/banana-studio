@@ -455,7 +455,7 @@ async function viewReferenceMode() {
     <button class="back-link" onclick="viewNewBatch()">${icon("arrowRight")}<span>رجوع لاختيار الوضع</span></button>
     ${noKeyBanner()}
     <div class="page-title">قالب / صورة جاهزة</div>
-    <div class="page-sub">المرجع يُطبَّق على كل المنتجات بثبات تام — لا توجد خانة برومبت</div>
+    <div class="page-sub">المرجع يُطبَّق على كل المنتجات — وتقدر تضيف برومبت (اختياري) لتعليمات إضافية</div>
 
     <div class="card">
       <label>اسم الدفعة</label>
@@ -482,6 +482,9 @@ async function viewReferenceMode() {
       ${qualityNote("r-qnote")}
 
       ${lockToggle("r-lock")}
+
+      <label>برومبت إضافي (اختياري) — تعليمات مع الأسلوب المرجعي</label>
+      <textarea id="r-prompt" placeholder="مثال: خلفية بيضاء نظيفة، وتأكد ما فيه أي عيوب أو أخطاء في المنتج"></textarea>
 
       <label>صور المنتجات (20-50 صورة)</label>
       <div class="file-drop" id="r-drop">${icon("upload")}<span>اسحب صور المنتجات هنا أو اضغط للاختيار</span></div>
@@ -514,13 +517,16 @@ async function refRun() {
   const btn = document.getElementById("r-run");
   setLoading(btn, "جارِ الرفع…");
 
+  const prompt = document.getElementById("r-prompt").value.trim();
   const fd = new FormData();
   fd.append("name", document.getElementById("r-name").value);
   fd.append("model", refMode.model);
   fd.append("aspect", refMode.aspect);
   fd.append("quality", refMode.quality);
   fd.append("lock", document.getElementById("r-lock").checked ? "1" : "0");
-  fd.append("strict", "1"); // ثبات تام — الخادم يستخدم تعليمة صارمة بدون برومبت مستخدم
+  // مع برومبت → نستخدمه مع الأسلوب المرجعي؛ بدونه → ثبات تام على المرجع
+  if (prompt) { fd.append("prompt", prompt); fd.append("strict", "0"); }
+  else fd.append("strict", "1");
   if (tpl) fd.append("template_id", tpl);
   else for (const f of refFiles) fd.append("reference", f);  // عدة مراجع
   for (const f of files) fd.append("images", f);
