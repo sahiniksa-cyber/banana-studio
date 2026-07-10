@@ -134,16 +134,28 @@ def _validate_key(model, key):
         )
 
 
-def generate(model, api_key, prompt, input_path, reference_path=None, aspect=None, quality=None):
-    """يوزّع على الموديل المطلوب ويرجّع bytes للصورة الناتجة."""
+def _as_ref_list(reference_paths):
+    """يقبل None أو مسارًا واحدًا أو قائمة، ويرجّع قائمة مسارات."""
+    if not reference_paths:
+        return []
+    if isinstance(reference_paths, (list, tuple)):
+        return list(reference_paths)
+    return [reference_paths]
+
+
+def generate(model, api_key, prompt, input_path, reference_paths=None, aspect=None, quality=None):
+    """يوزّع على الموديل المطلوب ويرجّع bytes للصورة الناتجة.
+
+    reference_paths: صورة مرجعية واحدة أو قائمة عدة مراجع (أسلوب متعدد الأمثلة).
+    """
     if not api_key:
         raise GenerationError(NO_KEY_MSG)
     _validate_key(model, api_key)
+    refs = _as_ref_list(reference_paths)
     if model in GEMINI_MODELS:
-        return _generate_gemini(api_key, prompt, input_path, reference_path, aspect,
-                                GEMINI_MODELS[model])
+        return _generate_gemini(api_key, prompt, input_path, refs, aspect, GEMINI_MODELS[model])
     if model == "gpt_image":
-        return _generate_openai(api_key, prompt, input_path, reference_path, aspect, quality)
+        return _generate_openai(api_key, prompt, input_path, refs, aspect, quality)
     raise GenerationError(f"موديل غير معروف: {model}")
 
 
@@ -277,18 +289,17 @@ def _foreground_alpha(path):
 
 
 # ---------- Nano Banana (Gemini) ----------
-def _generate_gemini(api_key, prompt, input_path, reference_path, aspect=None,
+def _generate_gemini(api_key, prompt, input_path, references=None, aspect=None,
                      model_id="gemini-2.5-flash-image"):
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
         f"{model_id}:generateContent"
     )
     parts = [{"text": prompt}]
-    # الصورة المدخلة (المنتج) أولاً = الأساس المطلوب الحفاظ عليه،
-    # ثم الصورة المرجعية (الأسلوب) ثانيًا كمرجع فقط.
+    # الصورة المدخلة (المنتج) أولاً، ثم المراجع (الأسلوب) — قد تكون عدة
     parts.append(_gemini_inline(input_path))
-    if reference_path:
-        parts.append(_gemini_inline(reference_path))
+    for rp in _as_ref_list(references):
+        parts.append(_gemini_inline(rp))
 
     body = {"contents": [{"parts": parts}]}
     if aspect:
@@ -327,10 +338,10 @@ def _gemini_inline(path):
 
 
 # ---------- GPT-Image (OpenAI) ----------
-def _generate_openai(api_key, prompt, input_path, reference_path, aspect=None, quality=None):
+def _generate_openai(api_key, prompt, input_path, references=None, aspect=None, quality=None):
     url = "https://api.openai.com/v1/images/edits"
-    # الصورة المدخلة (المنتج) أولاً = الأساس، ثم المرجع (الأسلوب) ثانيًا
-    paths = [input_path] + ([reference_path] if reference_path else [])
+    # الصورة المدخلة (المنتج) أولاً = الأساس، ثم المراجع (الأسلوب) — قد تكون عدة
+    paths = [input_path] + _as_ref_list(references)
     data = {"model": GPT_IMAGE_MODEL, "prompt": prompt}
     if aspect in _OPENAI_SIZE:
         data["size"] = _OPENAI_SIZE[aspect]

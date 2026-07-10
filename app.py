@@ -61,15 +61,15 @@ _KEEP_CLAUSE = (
     "والهوية والتفاصيل والنِّسب، ولا تستبدله بأي منتج آخر."
 )
 _REF_CLAUSE = (
-    " الصورة الثانية مرجع للأسلوب فقط (الخلفية، الإضاءة، الألوان، الطابع) — "
-    "استرشد بأسلوبها فقط ولا تنسخ المنتج أو العناصر منها."
+    " الصور التالية مراجع للأسلوب فقط (الخلفية، الإضاءة، الألوان، الطابع) — "
+    "افهم الأسلوب المشترك بينها واسترشد به فقط، ولا تنسخ المنتج أو العناصر منها."
 )
 
-# الوضع "ب" (ثبات تام، بدون برومبت): يطابق أسلوب المرجع مع الحفاظ على منتج المستخدم.
+# الوضع "ب" (ثبات تام، بدون برومبت): يطابق أسلوب المراجع مع الحفاظ على منتج المستخدم.
 STRICT_INSTRUCTION = (
     _KEEP_CLAUSE
-    + " طابِق خلفية وإضاءة وألوان وطابع الصورة الثانية (المرجع) على منتج الصورة "
-    "الأولى، دون تغيير المنتج نفسه ودون نسخ منتج المرجع."
+    + " طابِق خلفية وإضاءة وألوان وطابع الصور المرجعية التالية على منتج الصورة "
+    "الأولى (افهم الأسلوب المشترك بينها)، دون تغيير المنتج نفسه ودون نسخ منتج المرجع."
 )
 
 
@@ -118,7 +118,7 @@ def _save_upload(file_storage):
 
 
 def _ref_path(name):
-    """مسار المرجع: قد يكون صورة مرفوعة (uploads) أو تصميمًا معتمدًا (results)."""
+    """مسار مرجع واحد: قد يكون صورة مرفوعة (uploads) أو تصميمًا معتمدًا (results)."""
     if not name:
         return None
     up = UPLOAD_DIR / name
@@ -128,6 +128,20 @@ def _ref_path(name):
     if res.exists():
         return res
     return up  # احتياطي
+
+
+def _ref_paths(names):
+    """قائمة مسارات المراجع (مفصولة بفاصلة) — تدعم عدة صور مرجعية."""
+    if not names:
+        return []
+    out = []
+    for n in str(names).split(","):
+        n = n.strip()
+        if n:
+            p = _ref_path(n)
+            if p and p.exists():
+                out.append(p)
+    return out
 
 
 # ============ الصفحة الرئيسية ============
@@ -224,13 +238,12 @@ def api_create_batch():
     quality = request.form.get("quality") or None
     lock_subject = request.form.get("lock", "0") == "1"  # قفل المنتج (افتراضيًا مطفأ = مظهر طبيعي)
 
-    # المرجع: إمّا ملف مرفوع، أو اسم ملف محفوظ مسبقًا (من جلسة تصميم الوضع "أ")
+    # المرجع: عدة ملفات مرفوعة (أسلوب متعدد الأمثلة)، أو اسم محفوظ (من الوضع "أ")
     reference = None
-    if "reference" in request.files and request.files["reference"].filename:
-        f = request.files["reference"]
-        if not _allowed(f.filename):
-            return jsonify({"error": "صيغة الصورة المرجعية غير مدعومة"}), 400
-        reference = _save_upload(f)
+    ref_files = [f for f in request.files.getlist("reference")
+                 if f.filename and _allowed(f.filename)]
+    if ref_files:
+        reference = ",".join(_save_upload(f) for f in ref_files)
     elif request.form.get("reference_name"):
         reference = secure_filename(request.form["reference_name"])
 
@@ -282,11 +295,11 @@ _BATCH_WORKERS = int(os.environ.get("BATCH_WORKERS", "10"))  # صور تُعال
 def _process_images(batch, images):
     """يعالج قائمة صور بنفس وصفة الدفعة، عدة صور بالتوازي لتسريع الدفعات الكبيرة."""
     api_key = _model_key(batch["model"])
-    reference = _ref_path(batch.get("reference"))
+    references = _ref_paths(batch.get("reference"))  # قد تكون عدة مراجع
     raw = batch.get("prompt")
     if raw and not batch.get("strict"):
         raw = generator.enhance_prompt(raw, _text_key())  # تحسين مرة واحدة
-    prompt = build_prompt(raw, reference is not None, batch.get("strict"))
+    prompt = build_prompt(raw, len(references) > 0, batch.get("strict"))
     lock = bool(batch.get("lock_subject"))
 
     def _one(img):
@@ -294,7 +307,7 @@ def _process_images(batch, images):
         try:
             out = generator.generate(
                 batch["model"], api_key, prompt,
-                UPLOAD_DIR / img["original"], reference,
+                UPLOAD_DIR / img["original"], references,
                 aspect=batch.get("aspect"), quality=batch.get("quality"),
             )
             if lock:

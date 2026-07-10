@@ -468,9 +468,9 @@ async function viewReferenceMode() {
       </select>
 
       <div id="r-ref-block">
-        <label>الصورة المرجعية</label>
-        <div class="file-drop" id="r-ref-drop">${icon("upload")}<span>اسحب الصورة المرجعية هنا أو اضغط للاختيار</span></div>
-        <input type="file" id="r-ref" accept="image/*" class="hidden">
+        <label>الصور المرجعية (تقدر تضيف عدة صور — يفهم الأسلوب المشترك بينها)</label>
+        <div class="file-drop" id="r-ref-drop">${icon("upload")}<span>اسحب صور الأسلوب المرجعية هنا أو اضغط للاختيار</span></div>
+        <input type="file" id="r-ref" multiple accept="image/*" class="hidden">
         <div id="r-ref-prev"></div>
       </div>
 
@@ -494,7 +494,7 @@ async function viewReferenceMode() {
   refMode.model = "gpt_image";
   wireChoicePills("r-aspect", refMode, "aspect", "1:1");
   wireChoicePills("r-quality", refMode, "quality", "high");
-  wireDrop("r-ref-drop", "r-ref", "r-ref-prev", false);
+  wireDrop("r-ref-drop", "r-ref", "r-ref-prev", true);
   wireDrop("r-drop", "r-files", "r-prev", true);
 }
 
@@ -508,8 +508,8 @@ async function refRun() {
   const files = document.getElementById("r-files").files;
   if (!files.length) return toast("ارفع صور المنتجات");
   const tpl = document.getElementById("r-template").value;
-  const refFile = document.getElementById("r-ref").files[0];
-  if (!tpl && !refFile) return toast("اختر قالبًا محفوظًا أو ارفع صورة مرجعية");
+  const refFiles = document.getElementById("r-ref").files;
+  if (!tpl && !refFiles.length) return toast("اختر قالبًا محفوظًا أو ارفع صورة مرجعية");
 
   const btn = document.getElementById("r-run");
   setLoading(btn, "جارِ الرفع…");
@@ -522,7 +522,7 @@ async function refRun() {
   fd.append("lock", document.getElementById("r-lock").checked ? "1" : "0");
   fd.append("strict", "1"); // ثبات تام — الخادم يستخدم تعليمة صارمة بدون برومبت مستخدم
   if (tpl) fd.append("template_id", tpl);
-  else if (refFile) fd.append("reference", refFile);
+  else for (const f of refFiles) fd.append("reference", f);  // عدة مراجع
   for (const f of files) fd.append("images", f);
 
   try {
@@ -635,12 +635,13 @@ async function reuseBatch(bid) {
   PREFILL = { prompt: b.prompt || "", aspect: b.aspect || "1:1", quality: b.quality || "high", lock: !!b.lock_subject };
   setActive("new-batch");
   viewDesignMode();
-  // عرض الصورة الأساسية (المرجع) وتمكين الاعتماد المباشر
+  // عرض الصورة الأساسية (أول مرجع) وتمكين الاعتماد المباشر
   if (b.reference) {
-    design.resultName = b.reference;
+    const firstRef = String(b.reference).split(",")[0].trim();
+    design.resultName = firstRef;
     design.prompt = b.prompt || "";
     document.getElementById("d-preview").innerHTML =
-      `<img src="/media/ref/${b.reference}?t=${Date.now()}" alt="">`;
+      `<img src="/media/ref/${firstRef}?t=${Date.now()}" alt="">`;
     document.getElementById("d-actions").classList.remove("hidden");
   }
   toast("عدّل الإعدادات أو البرومبت، ثم ولّد من جديد أو اعتمد");
