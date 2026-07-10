@@ -11,10 +11,34 @@ import base64
 import io
 import logging
 import mimetypes
+import time
 import requests
 from PIL import Image, ImageFilter, ImageDraw, ImageOps
 
 _log = logging.getLogger(__name__)
+_RETRY_CODES = {429, 500, 502, 503, 504}  # ضغط/أخطاء مؤقتة → نعيد المحاولة
+
+
+def _post_with_retry(url, headers, data, files_factory, attempts=5):
+    """POST مع إعادة محاولة عند الضغط (429) أو الأخطاء المؤقتة، مع تراجع تصاعدي.
+
+    files_factory(): دالة تُرجع قائمة الملفات جديدة في كل محاولة (لأن التيّارات تُستهلك).
+    """
+    resp = None
+    for i in range(attempts):
+        fhs = []
+        try:
+            files = files_factory(fhs)
+            resp = requests.post(url, headers=headers, data=data, files=files, timeout=_TIMEOUT)
+        finally:
+            for fh in fhs:
+                try: fh.close()
+                except Exception: pass
+        if resp.status_code in _RETRY_CODES and i < attempts - 1:
+            time.sleep(min(4 * (2 ** i), 30))  # 4,8,16,30…
+            continue
+        break
+    return resp
 
 # معرّفات الموديلات
 GPT_IMAGE_MODEL = "gpt-image-2"   # أحدث موديل صور من OpenAI (مؤكّد يعمل مع حساب المستخدم)
@@ -158,19 +182,20 @@ def generate_masked_openai(api_key, prompt, image_path, frontend_mask_path, qual
     mask_img = Image.new("RGBA", img.size, (0, 0, 0, 255))
     mask_img.putalpha(alpha)
 
-    img_buf = io.BytesIO(); img.save(img_buf, "PNG"); img_buf.seek(0)
-    mask_buf = io.BytesIO(); mask_img.save(mask_buf, "PNG"); mask_buf.seek(0)
+    img_bytes = io.BytesIO(); img.save(img_bytes, "PNG"); img_bytes = img_bytes.getvalue()
+    mask_bytes = io.BytesIO(); mask_img.save(mask_bytes, "PNG"); mask_bytes = mask_bytes.getvalue()
 
     data = {"model": GPT_IMAGE_MODEL, "prompt": prompt}
     if quality in _VALID_QUALITY:
         data["quality"] = quality
-    resp = requests.post(
+
+    def _files(_fhs):
+        return [("image", ("image.png", io.BytesIO(img_bytes), "image/png")),
+                ("mask", ("mask.png", io.BytesIO(mask_bytes), "image/png"))]
+
+    resp = _post_with_retry(
         "https://api.openai.com/v1/images/edits",
-        headers={"Authorization": f"Bearer {api_key}"},
-        data=data,
-        files=[("image", ("image.png", img_buf, "image/png")),
-               ("mask", ("mask.png", mask_buf, "image/png"))],
-        timeout=_TIMEOUT,
+        {"Authorization": f"Bearer {api_key}"}, data, _files,
     )
     if resp.status_code != 200:
         raise GenerationError(f"OpenAI خطأ {resp.status_code}: {resp.text[:300]}")
@@ -304,29 +329,22 @@ def _gemini_inline(path):
 # ---------- GPT-Image (OpenAI) ----------
 def _generate_openai(api_key, prompt, input_path, reference_path, aspect=None, quality=None):
     url = "https://api.openai.com/v1/images/edits"
-    files = []
-    fhs = []
-    try:
-        # الصورة المدخلة (المنتج) أولاً = الأساس، ثم المرجع (الأسلوب) ثانيًا
-        for p in [input_path] + ([reference_path] if reference_path else []):
-            fh = open(p, "rb")
-            fhs.append(fh)
-            files.append(("image[]", (str(p).replace("\\", "/").split("/")[-1], fh, _guess_mime(p))))
-        data = {"model": GPT_IMAGE_MODEL, "prompt": prompt}
-        if aspect in _OPENAI_SIZE:
-            data["size"] = _OPENAI_SIZE[aspect]
-        if quality in _VALID_QUALITY:
-            data["quality"] = quality
-        resp = requests.post(
-            url,
-            headers={"Authorization": f"Bearer {api_key}"},
-            data=data,
-            files=files,
-            timeout=_TIMEOUT,
-        )
-    finally:
-        for fh in fhs:
-            fh.close()
+    # الصورة المدخلة (المنتج) أولاً = الأساس، ثم المرجع (الأسلوب) ثانيًا
+    paths = [input_path] + ([reference_path] if reference_path else [])
+    data = {"model": GPT_IMAGE_MODEL, "prompt": prompt}
+    if aspect in _OPENAI_SIZE:
+        data["size"] = _OPENAI_SIZE[aspect]
+    if quality in _VALID_QUALITY:
+        data["quality"] = quality
+
+    def _files(fhs):
+        out = []
+        for p in paths:
+            fh = open(p, "rb"); fhs.append(fh)
+            out.append(("image[]", (str(p).replace("\\", "/").split("/")[-1], fh, _guess_mime(p))))
+        return out
+
+    resp = _post_with_retry(url, {"Authorization": f"Bearer {api_key}"}, data, _files)
 
     if resp.status_code != 200:
         raise GenerationError(f"OpenAI خطأ {resp.status_code}: {resp.text[:300]}")
