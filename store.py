@@ -87,7 +87,8 @@ def _migrate(conn):
 
 
 def _connect():
-    conn = sqlite3.connect(_DB_PATH)
+    # timeout ينتظر على قفل قاعدة البيانات عند الكتابة المتوازية من عدة خيوط
+    conn = sqlite3.connect(_DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 

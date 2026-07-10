@@ -6,6 +6,7 @@ import uuid
 import zipfile
 import io
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 from flask import (
     Flask,
@@ -275,8 +276,11 @@ def _text_key():
     return _model_key("gpt_image")
 
 
+_BATCH_WORKERS = int(os.environ.get("BATCH_WORKERS", "4"))  # صور تُعالج بالتوازي
+
+
 def _process_images(batch, images):
-    """يعالج قائمة صور بنفس وصفة الدفعة (يُستخدم للدفعة الأولى ولإضافة صور لاحقًا)."""
+    """يعالج قائمة صور بنفس وصفة الدفعة، عدة صور بالتوازي لتسريع الدفعات الكبيرة."""
     api_key = _model_key(batch["model"])
     reference = _ref_path(batch.get("reference"))
     raw = batch.get("prompt")
@@ -285,7 +289,7 @@ def _process_images(batch, images):
     prompt = build_prompt(raw, reference is not None, batch.get("strict"))
     lock = bool(batch.get("lock_subject"))
 
-    for img in images:
+    def _one(img):
         store.update_image(img["id"], status="running")
         try:
             out = generator.generate(
@@ -300,6 +304,10 @@ def _process_images(batch, images):
             store.update_image(img["id"], status="done", result=result_name, error=None)
         except Exception as e:  # noqa: BLE001
             store.update_image(img["id"], status="failed", error=str(e)[:400])
+
+    workers = max(1, min(_BATCH_WORKERS, len(images)))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        list(ex.map(_one, images))
 
 
 def _process_batch(bid):
