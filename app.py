@@ -445,43 +445,49 @@ def api_regenerate(iid):
         data = request.get_json(force=True)
         custom_prompt = (data.get("prompt") or "").strip()
 
-    api_key = _model_key(batch["model"])
-    # الصورة الحالية (النتيجة) هي أساس التعديل — نبني عليها لا على الأصل
-    current = RESULT_DIR / img["result"] if img.get("result") else UPLOAD_DIR / img["original"]
+    # نحفظ القناع الآن (قبل انتهاء الطلب) ونمرّر مساره للخلفية
+    mask_name = None
+    if mask_file and mask_file.filename:
+        mask_name = f"mask_{uuid.uuid4().hex}.png"
+        mask_file.save(UPLOAD_DIR / mask_name)
 
     store.update_image(iid, status="running", custom_prompt=custom_prompt or None)
+    # التعديل يعمل بالخلفية حتى لا يحجز خيوط الخادم (لا يعلّق الموقع)
+    threading.Thread(target=_do_edit, args=(iid, custom_prompt, mask_name), daemon=True).start()
+    return jsonify(store.get_image(iid))  # يرجّع "يعالج" فورًا؛ المعرض يتحدّث بالتتبّع
+
+
+def _do_edit(iid, custom_prompt, mask_name):
+    img = store.get_image(iid)
+    batch = store.get_batch(img["batch_id"])
+    api_key = _model_key(batch["model"])
+    current = RESULT_DIR / img["result"] if img.get("result") else UPLOAD_DIR / img["original"]
     try:
         if custom_prompt:
-            # التعديل تجربة سريعة → جودة سريعة (الجودة العالية تستغرق دقائق)
-            edit_q = "low"
-            if mask_file and mask_file.filename:
-                # تحرير منطقة محددة عبر قناع OpenAI الأصلي (يفهم المنطقة ويدمجها)
-                mask_name = f"mask_{uuid.uuid4().hex}.png"
-                mask_file.save(UPLOAD_DIR / mask_name)
+            edit_q = "low"  # التعديل تجربة سريعة → جودة سريعة
+            if mask_name:
                 mprompt = MASK_EDIT_INSTRUCTION.format(edit=custom_prompt)
                 if _is_gpt(batch["model"]):
                     out = generator.generate_masked_openai(
                         api_key, mprompt, current, UPLOAD_DIR / mask_name, quality=edit_q,
                     )
-                else:  # احتياطي لغير OpenAI: دمج محلي
+                else:
                     out = generator.generate_region(
                         batch["model"], api_key, mprompt, current, None,
                         UPLOAD_DIR / mask_name, current,
                         aspect=batch.get("aspect"), quality=edit_q,
                     )
             else:
-                # تعديل موجّه على كامل الصورة الحالية (بدون تحديد)
                 out = generator.generate(
                     batch["model"], api_key, EDIT_INSTRUCTION.format(edit=custom_prompt),
                     current, None, aspect=batch.get("aspect"), quality=edit_q,
                 )
         else:
-            # بدون أمر: إعادة تطبيق وصفة الدفعة على الصورة الأصلية
-            reference = _ref_path(batch.get("reference"))
+            reference = _ref_paths(batch.get("reference"))
             raw = batch.get("prompt")
             if raw and not batch.get("strict"):
                 raw = generator.enhance_prompt(raw, _text_key())
-            prompt = build_prompt(raw, reference is not None, batch.get("strict"))
+            prompt = build_prompt(raw, len(reference) > 0, batch.get("strict"))
             out = generator.generate(
                 batch["model"], api_key, prompt,
                 UPLOAD_DIR / img["original"], reference,
@@ -494,18 +500,34 @@ def api_regenerate(iid):
         store.update_image(iid, status="done", result=result_name, error=None)
     except Exception as e:  # noqa: BLE001
         store.update_image(iid, status="failed", error=str(e)[:400])
-    return jsonify(store.get_image(iid))
 
 
 # ============ خدمة ملفات الصور ============
+def _serve_media(path):
+    if not path.exists():
+        abort(404)
+    w = request.args.get("w", type=int)
+    if w and 0 < w <= 1024:  # مصغّرة خفيفة للمعرض (تقلّل التحميل مع كثرة الصور)
+        try:
+            im = Image.open(path)
+            im.thumbnail((w, w))
+            buf = io.BytesIO()
+            im.convert("RGB").save(buf, "JPEG", quality=82)
+            buf.seek(0)
+            return send_file(buf, mimetype="image/jpeg")
+        except Exception:  # noqa: BLE001
+            pass
+    return send_file(path)
+
+
 @app.route("/media/upload/<name>")
 def media_upload(name):
-    return send_file(UPLOAD_DIR / secure_filename(name))
+    return _serve_media(UPLOAD_DIR / secure_filename(name))
 
 
 @app.route("/media/result/<name>")
 def media_result(name):
-    return send_file(RESULT_DIR / secure_filename(name))
+    return _serve_media(RESULT_DIR / secure_filename(name))
 
 
 @app.route("/media/ref/<name>")

@@ -658,7 +658,8 @@ async function renderBatchImages() {
   const grid = document.getElementById("img-grid");
   if (!grid) return;
   grid.innerHTML = b.images.map((img) => {
-    const src = img.result ? `/media/result/${img.result}` : `/media/upload/${img.original}`;
+    // مصغّرة خفيفة (w=400) لتسريع المعرض مع كثرة الصور
+    const src = img.result ? `/media/result/${img.result}?w=400` : `/media/upload/${img.original}?w=400`;
     const overlay = img.status === "running" || img.status === "queued"
       ? `<div class="spin">${spinner()} ${statusLabel(img.status)}</div>` : "";
     return `<div class="img-cell" onclick="openImage(${img.id})">
