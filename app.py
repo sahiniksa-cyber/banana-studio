@@ -72,6 +72,14 @@ STRICT_INSTRUCTION = (
 )
 
 
+# تعليمة التعديل الموجّه: يطبّق أمر المستخدم فقط ويحافظ على بقية الصورة كما هي.
+EDIT_INSTRUCTION = (
+    "هذه صورة جاهزة. طبّق التعديل التالي فقط، مع الحفاظ التام على بقية الصورة "
+    "(المنتج، الخلفية، التكوين، الإضاءة، الألوان) كما هي تمامًا دون تغيير أي شيء آخر "
+    "ودون إعادة تصميم الخلفية: {edit}"
+)
+
+
 def build_prompt(user_prompt, has_reference, strict):
     """يبني التعليمة النهائية للموديل مع توضيح أدوار الصور."""
     if strict:
@@ -387,37 +395,41 @@ def api_regenerate(iid):
         custom_prompt = (data.get("prompt") or "").strip()
 
     api_key = _model_key(batch["model"])
-    reference = _ref_path(batch.get("reference"))
-    # برومبت مخصص من المستخدم يتقدّم؛ وإلا نستخدم برومبت الدفعة/الثبات
-    if custom_prompt:
-        prompt = build_prompt(generator.enhance_prompt(custom_prompt, _text_key()),
-                              reference is not None, strict=False)
-    else:
-        raw = batch.get("prompt")
-        if raw and not batch.get("strict"):
-            raw = generator.enhance_prompt(raw, _text_key())
-        prompt = build_prompt(raw, reference is not None, batch.get("strict"))
+    # الصورة الحالية (النتيجة) هي أساس التعديل — نبني عليها لا على الأصل
+    current = RESULT_DIR / img["result"] if img.get("result") else UPLOAD_DIR / img["original"]
 
     store.update_image(iid, status="running", custom_prompt=custom_prompt or None)
     try:
-        if mask_file and mask_file.filename:
-            # تعديل منطقة محددة: يُدمج الجديد داخل القناع فوق النتيجة الحالية
-            mask_name = f"mask_{uuid.uuid4().hex}.png"
-            mask_file.save(UPLOAD_DIR / mask_name)
-            base = RESULT_DIR / img["result"] if img.get("result") else UPLOAD_DIR / img["original"]
-            out = generator.generate_region(
-                batch["model"], api_key, prompt,
-                UPLOAD_DIR / img["original"], reference,
-                UPLOAD_DIR / mask_name, base,
-                aspect=batch.get("aspect"), quality=batch.get("quality"),
-            )
+        if custom_prompt:
+            # تعديل موجّه: نطبّق أمر المستخدم حرفيًا على الصورة الحالية فقط
+            # (بدون تحسين/توسيع، وبدون مرجع، وبدون قفل) حتى لا يعيد رسم كل شيء
+            prompt = EDIT_INSTRUCTION.format(edit=custom_prompt)
+            if mask_file and mask_file.filename:
+                mask_name = f"mask_{uuid.uuid4().hex}.png"
+                mask_file.save(UPLOAD_DIR / mask_name)
+                out = generator.generate_region(
+                    batch["model"], api_key, prompt, current, None,
+                    UPLOAD_DIR / mask_name, current,
+                    aspect=batch.get("aspect"), quality=batch.get("quality"),
+                )
+            else:
+                out = generator.generate(
+                    batch["model"], api_key, prompt, current, None,
+                    aspect=batch.get("aspect"), quality=batch.get("quality"),
+                )
         else:
+            # بدون أمر: إعادة تطبيق وصفة الدفعة على الصورة الأصلية
+            reference = _ref_path(batch.get("reference"))
+            raw = batch.get("prompt")
+            if raw and not batch.get("strict"):
+                raw = generator.enhance_prompt(raw, _text_key())
+            prompt = build_prompt(raw, reference is not None, batch.get("strict"))
             out = generator.generate(
                 batch["model"], api_key, prompt,
                 UPLOAD_DIR / img["original"], reference,
                 aspect=batch.get("aspect"), quality=batch.get("quality"),
             )
-            if batch.get("lock_subject"):  # قفل المنتج (اختياري)
+            if batch.get("lock_subject"):
                 out = generator.lock_subject(UPLOAD_DIR / img["original"], out)
         result_name = f"{uuid.uuid4().hex}.png"
         (RESULT_DIR / result_name).write_bytes(out)
