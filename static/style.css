@@ -246,6 +246,7 @@ select {
 }
 .img-cell .status.done { color: var(--ok); }
 .img-cell .status.failed { color: var(--err); }
+.img-cell .status.stopped { color: var(--warn); }
 .img-cell .status.running, .img-cell .status.queued { color: var(--blue); }
 .img-cell .spin {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px;

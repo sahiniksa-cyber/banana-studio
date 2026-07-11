@@ -290,6 +290,8 @@ def _text_key():
 
 
 _BATCH_WORKERS = int(os.environ.get("BATCH_WORKERS", "6"))  # التوازي (منظّم المعدّل يمنع تجاوز الحد)
+_CANCELLED = set()          # أرقام الدفعات الموقوفة
+_CANCEL_LOCK = threading.Lock()
 
 
 def _process_images(batch, images):
@@ -302,7 +304,12 @@ def _process_images(batch, images):
     prompt = build_prompt(raw, len(references) > 0, batch.get("strict"))
     lock = bool(batch.get("lock_subject"))
 
+    bid = batch["id"]
+
     def _one(img):
+        if bid in _CANCELLED:  # أُوقفت الدفعة → لا تبدأ صورة جديدة
+            store.update_image(img["id"], status="stopped")
+            return
         store.update_image(img["id"], status="running")
         try:
             out = generator.generate(
@@ -327,18 +334,22 @@ def _process_batch(bid):
     batch = store.get_batch(bid)
     if not batch:
         return
+    with _CANCEL_LOCK:
+        _CANCELLED.discard(bid)
     store.set_batch_status(bid, "running")
     _process_images(batch, store.list_images(bid))
-    store.set_batch_status(bid, "done")
+    store.set_batch_status(bid, "stopped" if bid in _CANCELLED else "done")
 
 
 def _process_added(bid, image_ids):
     batch = store.get_batch(bid)
     if not batch:
         return
+    with _CANCEL_LOCK:
+        _CANCELLED.discard(bid)
     store.set_batch_status(bid, "running")
     _process_images(batch, [store.get_image(i) for i in image_ids])
-    store.set_batch_status(bid, "done")
+    store.set_batch_status(bid, "stopped" if bid in _CANCELLED else "done")
 
 
 @app.route("/api/batches/<int:bid>")
@@ -370,6 +381,35 @@ def api_add_images(bid):
     store.set_batch_status(bid, "running")
     threading.Thread(target=_process_added, args=(bid, new_ids), daemon=True).start()
     return jsonify({"ok": True, "added": len(new_ids)})
+
+
+@app.route("/api/batches/<int:bid>/stop", methods=["POST"])
+def api_stop_batch(bid):
+    """إيقاف تنفيذ الدفعة: يمنع بدء صور جديدة (الجارية تكمل)."""
+    with _CANCEL_LOCK:
+        _CANCELLED.add(bid)
+    for img in store.list_images(bid):
+        if img["status"] in ("queued", "pending"):
+            store.update_image(img["id"], status="stopped")
+    store.set_batch_status(bid, "stopped")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/batches/<int:bid>/retry-failed", methods=["POST"])
+def api_retry_failed(bid):
+    """إعادة معالجة الصور الفاشلة/الموقوفة بنفس وصفة الدفعة."""
+    batch = store.get_batch(bid)
+    if not batch:
+        abort(404)
+    ids = [img["id"] for img in store.list_images(bid)
+           if img["status"] in ("failed", "stopped")]
+    if not ids:
+        return jsonify({"ok": True, "retried": 0})
+    for i in ids:
+        store.update_image(i, status="queued", error=None)
+    store.set_batch_status(bid, "running")
+    threading.Thread(target=_process_added, args=(bid, ids), daemon=True).start()
+    return jsonify({"ok": True, "retried": len(ids)})
 
 
 @app.route("/api/batches/<int:bid>/download")

@@ -28,6 +28,7 @@ const ICONS = {
   upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
   layers: '<path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>',
   x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  stop: '<rect x="5" y="5" width="14" height="14" rx="2"/>',
 };
 
 function icon(name, cls = "ico") {
@@ -69,7 +70,7 @@ async function api(url, opts) {
 }
 
 function statusLabel(s) {
-  return { queued: "بالانتظار", running: "يعالج…", done: "جاهزة", failed: "فشلت" }[s] || s;
+  return { queued: "بالانتظار", running: "يعالج…", done: "جاهزة", failed: "فشلت", stopped: "متوقّف" }[s] || s;
 }
 
 // هل يوجد مفتاح API مضبوط؟ (يُحدّث عند الإقلاع وبعد حفظ الإعدادات)
@@ -569,6 +570,7 @@ async function renderBatch() {
         <button class="btn ghost" onclick="navigate('batches')">${icon("arrowRight")}<span>رجوع</span></button>
         <button class="btn ghost" onclick="reuseBatch(${b.id})">${icon("edit")}<span>صفحة البرومبت</span></button>
         <button class="btn ghost" onclick="document.getElementById('add-images-input').click()">${icon("plus")}<span>أضف صور</span></button>
+        <span id="batch-extra"></span>
         <button class="btn" onclick="downloadAllImages(${b.id})">${icon("download")}<span>تحميل الصور</span></button>
         <button class="btn danger" onclick="deleteBatch(${b.id})">${icon("trash")}<span>حذف</span></button>
       </div>
@@ -670,7 +672,32 @@ async function renderBatchImages() {
   }).join("");
   // نستمر بالتحديث ما دامت أي صورة قيد المعالجة (يشمل التعديلات بعد اكتمال الدفعة)
   const anyRunning = b.images.some((i) => i.status === "running" || i.status === "queued");
+  const anyFailed = b.images.some((i) => i.status === "failed" || i.status === "stopped");
+  const extra = document.getElementById("batch-extra");
+  if (extra) {
+    extra.innerHTML =
+      (anyRunning ? `<button class="btn danger" onclick="stopBatch(${b.id})">${icon("stop")}<span>إيقاف</span></button>` : "") +
+      (anyFailed ? `<button class="btn" onclick="retryFailed(${b.id})">${icon("refresh")}<span>إعادة الفاشلة</span></button>` : "");
+  }
   if (!anyRunning) stopPoll();
+}
+
+async function stopBatch(bid) {
+  try {
+    await api(`/api/batches/${bid}/stop`, { method: "POST" });
+    toast("تم الإيقاف — الصور الجارية تكمل فقط");
+    renderBatchImages();
+  } catch (e) { toast(e.message); }
+}
+
+async function retryFailed(bid) {
+  try {
+    const r = await api(`/api/batches/${bid}/retry-failed`, { method: "POST" });
+    if (!r.retried) return toast("لا توجد صور فاشلة");
+    toast(`إعادة معالجة ${r.retried} صورة`);
+    ensurePoll();
+    renderBatchImages();
+  } catch (e) { toast(e.message); }
 }
 
 async function deleteBatch(bid) {
