@@ -158,6 +158,167 @@ class GenerationError(Exception):
     pass
 
 
+# ---------- تحسين الجودة بالذكاء (مستويات) ----------
+# مستوى التحسين → شدّة اللغة + جودة الإخراج (خانات مثل الجودات في الواجهة)
+ENHANCE_LEVELS = {
+    "light":  {"word": "subtly",       "quality": "medium"},
+    "medium": {"word": "noticeably",   "quality": "high"},
+    "strong": {"word": "dramatically", "quality": "high"},
+}
+
+ENHANCE_INSTRUCTION = (
+    "Enhance this product photo to the highest professional quality: {word} increase sharpness "
+    "and fine detail, upscale perceived resolution, reduce noise and compression artefacts, and "
+    "improve overall clarity and lighting. CRITICAL: keep the product/subject identity, shape, "
+    "colours, materials, any text or logo, and the overall composition EXACTLY the same — do not "
+    "add, remove, move or restyle anything. Only improve the technical image quality."
+)
+
+# بادئة تصعيد التحسين عند رجوع نتيجة شبه مطابقة (لم يتحسّن شيء)
+ENHANCE_ESCALATE = (
+    "The previous result looked essentially unchanged. Apply a clearly stronger, more visible "
+    "quality enhancement now, while still keeping the product identical. "
+)
+
+
+# ---------- مساعد البرومبت: وصف العميل العامّي → برومبت احترافي جاهز ----------
+_ASSIST_MODEL = "gpt-4o-mini"
+_ASSIST_SYS = (
+    "You are a senior prompt engineer for a professional AI product-photography editor. "
+    "The user describes — often in casual Arabic — what their CLIENT wants for a product image. "
+    "Understand the intent precisely, then output ONE single, ready-to-use, richly detailed "
+    "ENGLISH prompt that instructs an AI image editor to transform an EXISTING product photo "
+    "accordingly. Cover, as relevant: scene and background, lighting and shadows, mood, camera "
+    "and lens, colour palette, composition, and commercial 'ChatGPT-quality' polish. ALWAYS "
+    "include an explicit instruction to keep the product itself unchanged (same shape, colours, "
+    "details and any text/logo). Output ONLY the final prompt. No preamble, no explanation, no "
+    "quotes, no markdown, no lists — just the prompt sentence(s)."
+)
+
+# بدايات ترفض (اعتذار/رفض) — نعتبرها ناتجًا غير صالح ونرجع للصيغة الاحتياطية
+_ASSIST_REJECT = (
+    "sorry", "i cannot", "i can't", "i'm unable", "i am unable", "as an ai",
+    "i'm sorry", "unfortunately", "i won't", "i will not",
+)
+
+
+def _assist_fallback(brief):
+    """صيغة احتياطية قوية عند غياب المفتاح أو فشل/رفض الموديل — لا تكسر أبدًا."""
+    b = (brief or "").strip()
+    return (
+        "High-end professional product photography of the same product, unchanged. "
+        f"Client request: {b}. Realise it as a clean commercial studio shot with balanced "
+        "composition, soft directional lighting, natural soft shadows, accurate colours, sharp "
+        "focus and fine detail. Keep the product itself exactly the same — same shape, colours, "
+        "materials, details and any text or logo — change only the scene, background and styling."
+    )
+
+
+def _assist_valid(txt):
+    """يتأكد أن ناتج الموديل برومبت حقيقي لا 'هبد': طول معقول وليس اعتذارًا/رفضًا."""
+    t = (txt or "").strip()
+    if len(t) < 25:
+        return False
+    low = t.lower()
+    return not any(low.startswith(p) for p in _ASSIST_REJECT)
+
+
+def assist_prompt(brief, openai_key):
+    """يحوّل وصف العميل المختصر إلى برومبت إنجليزي احترافي جاهز للمراجعة.
+
+    عند غياب المفتاح أو فشل الشبكة أو ناتج غير صالح → صيغة احتياطية قوية (لا يفشل).
+    """
+    b = (brief or "").strip()
+    if not b:
+        return b
+    if not openai_key or not openai_key.startswith("sk-"):
+        return _assist_fallback(b)
+    try:
+        r = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {openai_key}"},
+            json={
+                "model": _ASSIST_MODEL,
+                "messages": [
+                    {"role": "system", "content": _ASSIST_SYS},
+                    {"role": "user", "content": b},
+                ],
+                "temperature": 0.7,
+                "max_tokens": 400,
+            },
+            timeout=60,
+        )
+        if r.status_code == 200:
+            txt = (r.json()["choices"][0]["message"]["content"] or "").strip()
+            if _assist_valid(txt):
+                return txt
+    except Exception:  # noqa: BLE001
+        pass
+    return _assist_fallback(b)
+
+
+# ---------- التحقق من أن التعديل نُفِّذ فعلًا (مقياس فرق بكسلي) ----------
+def _as_pil(src):
+    """يقبل مسارًا أو bytes أو صورة PIL ويرجّع صورة PIL بوضع RGB."""
+    if isinstance(src, Image.Image):
+        return src.convert("RGB")
+    if isinstance(src, (bytes, bytearray)):
+        return Image.open(io.BytesIO(bytes(src))).convert("RGB")
+    return Image.open(src).convert("RGB")
+
+
+# عتبات "هل تغيّرت الصورة فعلًا؟" (متوسط فرق رمادي 0..255 على مقاس 256)
+EDIT_MIN_CHANGE = 1.5   # تعديل عام على كامل الصورة
+MASK_MIN_CHANGE = 3.0   # تعديل داخل منطقة محدّدة (يجب أن يكون أوضح)
+
+
+def edit_with_verify(run_fn, before, mask=None, min_change=None, plan=None):
+    """يشغّل التعديل ويتحقق أنه غيّر الصورة فعلًا؛ يصعّد ويعيد المحاولة إن لم ينفّذ.
+
+    run_fn(escalate: bool, quality: str) -> bytes الناتج.
+    before: الصورة قبل التعديل (مسار/bytes/PIL) للمقارنة.
+    mask:  قناع اختياري — يقيس الفرق داخل التأشير فقط (أبيض = المنطقة).
+    يرجّع: {"out": bytes, "changed": bool, "attempts": int, "metric": float}.
+      changed=False تعني أن الموديل لم ينفّذ التعديل رغم كل المحاولات
+      (نرجّع أفضل ناتج حتى يقرّر النداء إظهار رسالة صريحة بدل ادّعاء النجاح).
+    """
+    if min_change is None:
+        min_change = MASK_MIN_CHANGE if mask is not None else EDIT_MIN_CHANGE
+    # الخطة: (تصعيد؟، الجودة) — أولًا سريع وبلا تصعيد، ثم مصعّد وأدقّ
+    steps = plan or [(False, "low"), (True, "medium")]
+    best_out, best_metric = None, -1.0
+    for i, (escalate, quality) in enumerate(steps):
+        out = run_fn(escalate, quality)
+        metric = change_metric(before, out, mask=mask)
+        if metric > best_metric:
+            best_out, best_metric = out, metric
+        if metric >= min_change:
+            return {"out": out, "changed": True, "attempts": i + 1, "metric": metric}
+    return {"out": best_out, "changed": False, "attempts": len(steps), "metric": best_metric}
+
+
+def change_metric(before, after, mask=None, _size=256):
+    """متوسط الفرق البكسلي (0..255) بين صورتين — اختياريًا داخل قناع فقط.
+
+    before/after/mask: مسار أو bytes أو صورة PIL. يُعاد تحجيم الكل لمقاس موحّد
+    قبل المقارنة (فلا يتأثر باختلاف الأبعاد). القناع: أبيض = المنطقة المعنيّة.
+    القيمة الأعلى = تغيّر أكبر؛ القريبة من الصفر = الموديل لم يعدّل شيئًا.
+    """
+    a = _as_pil(before).resize((_size, _size), Image.LANCZOS).convert("L")
+    b = _as_pil(after).resize((_size, _size), Image.LANCZOS).convert("L")
+    aa = np.asarray(a, dtype=np.float32)
+    bb = np.asarray(b, dtype=np.float32)
+    diff = np.abs(aa - bb)
+    if mask is not None:
+        m = _as_pil(mask).resize((_size, _size), Image.LANCZOS).convert("L")
+        mm = np.asarray(m, dtype=np.float32) / 255.0
+        total = float(mm.sum())
+        if total < 1.0:  # قناع فارغ عمليًا → قِس الصورة كاملة
+            return float(diff.mean())
+        return float((diff * mm).sum() / total)
+    return float(diff.mean())
+
+
 def _guess_mime(path):
     mime, _ = mimetypes.guess_type(str(path))
     return mime or "image/png"

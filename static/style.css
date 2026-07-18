@@ -394,6 +394,46 @@ select {
 .tool:hover { color: var(--text); background: var(--panel); }
 .tool.active { background: var(--blue); color: #fff; }
 
+/* ===== تكبير الصور (Zoom) ===== */
+.zoom-inner {
+  position: absolute; inset: 0;
+  transform-origin: center center;
+  will-change: transform;
+}
+.preview-frame { position: relative; }
+.frame.zoomed, .preview-frame.zoomed { cursor: grab; }
+.frame.zoomed:active, .preview-frame.zoomed:active { cursor: grabbing; }
+.zoom-ctrl {
+  position: absolute; top: 8px; inset-inline-start: 8px; z-index: 6;
+  display: flex; gap: 4px; opacity: 0; transition: 0.15s; pointer-events: none;
+}
+.frame:hover .zoom-ctrl, .preview-frame:hover .zoom-ctrl { opacity: 1; pointer-events: auto; }
+.zoom-ctrl button {
+  width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.94); color: var(--text); cursor: pointer;
+  font-size: 16px; font-weight: 700; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: var(--shadow-sm); padding: 0;
+}
+.zoom-ctrl button:hover { background: var(--blue); color: #fff; border-color: var(--blue); }
+
+/* ===== مساعد البرومبت ===== */
+.assist-bar { margin: -8px 0 14px; }
+.btn.assist { background: var(--blue-50); color: var(--blue-active); border-color: var(--blue-100); }
+.btn.assist:hover { background: var(--blue-100); border-color: var(--blue); color: var(--blue-active); }
+.btn.assist .ico { color: var(--blue); }
+
+/* ===== صندوق تحسين الجودة (نافذة التعديل) ===== */
+.enhance-box {
+  margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--border-strong);
+}
+.enhance-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; font-size: 0.9rem; }
+.enhance-head .ico { width: 18px; height: 18px; color: var(--blue); }
+.enhance-head span { color: var(--muted); font-size: 0.82rem; font-weight: 500; }
+.enhance-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.enhance-row .pill-choice { margin-bottom: 0; }
+.enhance-row .pill { flex: 0 1 auto; padding: 8px 14px; font-size: 0.85rem; }
+
 /* ===== التنبيهات والحالات ===== */
 .demo-banner {
   display: flex; align-items: flex-start; gap: 10px;

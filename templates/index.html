@@ -61,13 +61,17 @@
       <div class="modal-body">
         <div class="compare">
           <div class="label-sm">الصورة الأصلية</div>
-          <div class="frame"><img id="modal-original" src="" alt=""></div>
+          <div class="frame" id="original-frame">
+            <div class="zoom-inner" id="original-zoom"><img id="modal-original" src="" alt=""></div>
+          </div>
         </div>
         <div class="compare">
           <div class="label-sm">النتيجة <span id="brush-hint" style="color:var(--muted-2);font-weight:400"></span></div>
           <div class="frame" id="result-frame">
-            <img id="modal-result" src="" alt="">
-            <canvas id="mask-canvas" class="mask-canvas"></canvas>
+            <div class="zoom-inner" id="result-zoom">
+              <img id="modal-result" src="" alt="">
+              <canvas id="mask-canvas" class="mask-canvas"></canvas>
+            </div>
           </div>
         </div>
       </div>
@@ -99,6 +103,7 @@
         </div>
         <label>اكتب التعديل المطلوب فقط — يُطبَّق على الصورة الحالية دون تغيير الباقي (اتركه فارغًا لإعادة توليد بنفس وصفة الدفعة)</label>
         <textarea id="modal-prompt" placeholder="مثال: خلّي الظل أخف · اجعل الخلفية أفتح قليلًا · شيل الانعكاس"></textarea>
+        <div class="assist-bar" id="modal-assist"></div>
         <div class="row" style="justify-content:flex-start">
           <button class="btn" id="regen-btn" onclick="regenerate()">
             <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
@@ -108,6 +113,21 @@
             <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             تحميل النتيجة
           </a>
+        </div>
+
+        <div class="enhance-box">
+          <div class="enhance-head">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            <b>تحسين الجودة بالذكاء</b>
+            <span>ارفع وضوح الصورة وتفاصيلها مع الحفاظ التام على المنتج</span>
+          </div>
+          <div class="enhance-row">
+            <div class="pill-choice" id="enh-level"></div>
+            <button class="btn ghost sm" id="enhance-btn" onclick="enhanceImage()">
+              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              حسّن الجودة
+            </button>
+          </div>
         </div>
       </div>
     </div>

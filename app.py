@@ -73,18 +73,32 @@ STRICT_INSTRUCTION = (
 )
 
 
-# تعليمة تحرير المنطقة المحددة (مع قناع): يصف محتوى المنطقة ويطلب الدمج الطبيعي.
+# تعليمة تحرير المنطقة المحددة (مع قناع): يصف مكان ومحتوى المنطقة ويطلب الدمج الطبيعي.
 MASK_EDIT_INSTRUCTION = (
-    "عدّل المنطقة المحددة فقط لتصبح: {edit}. اجعلها طبيعية ومتجانسة تمامًا مع باقي "
-    "الصورة في الإضاءة والألوان والمنظور."
+    "طبّق هذا التعديل داخل المنطقة المحدّدة (المؤشَّر عليها) فقط ولا شيء خارجها: {edit}. "
+    "يجب أن يظهر أثر التعديل بوضوح داخل تلك المنطقة تحديدًا، وأن يندمج طبيعيًا تمامًا مع باقي "
+    "الصورة في الإضاءة والألوان والمنظور، دون تغيير أي شيء خارج المنطقة."
 )
 
-# تعليمة التعديل الموجّه: يطبّق أمر المستخدم فقط ويحافظ على بقية الصورة كما هي.
+# تعليمة التعديل الموجّه: يطبّق أمر المستخدم فعليًا ويحافظ على بقية الصورة كما هي.
 EDIT_INSTRUCTION = (
-    "هذه صورة جاهزة. طبّق التعديل التالي فقط، مع الحفاظ التام على بقية الصورة "
-    "(المنتج، الخلفية، التكوين، الإضاءة، الألوان) كما هي تمامًا دون تغيير أي شيء آخر "
-    "ودون إعادة تصميم الخلفية: {edit}"
+    "هذه صورة جاهزة، طبّق عليها هذا التعديل فعليًا وبشكل واضح ومرئي: {edit}. "
+    "نفّذ التعديل المطلوب بالضبط — لا تُرجع الصورة كما هي دون تغيير. "
+    "مع الحفاظ التام على بقية الصورة (المنتج، الخلفية، التكوين، الإضاءة، الألوان) كما هي "
+    "دون تغيير أي شيء آخر ودون إعادة تصميم الخلفية."
 )
+
+# بادئة التصعيد: تُضاف عند فشل المحاولة الأولى (الموديل لم ينفّذ التعديل).
+_EDIT_ESCALATE = (
+    "تنبيه: محاولة سابقة أعادت الصورة كما هي دون تنفيذ التعديل. هذه المرة يجب أن تنفّذ "
+    "التعديل المطلوب بوضوح تام وبشكل مرئي لا لبس فيه. "
+)
+
+
+def _edit_instruction(edit, mask, escalate):
+    """يبني تعليمة التعديل (عادية/بقناع) مع تصعيد اختياري عند إعادة المحاولة."""
+    base = (MASK_EDIT_INSTRUCTION if mask else EDIT_INSTRUCTION).format(edit=edit)
+    return (_EDIT_ESCALATE + base) if escalate else base
 
 
 def build_prompt(user_prompt, has_reference, strict):
@@ -497,31 +511,69 @@ def api_regenerate(iid):
     return jsonify(store.get_image(iid))  # يرجّع "يعالج" فورًا؛ المعرض يتحدّث بالتتبّع
 
 
+# ============ تحسين جودة صورة بالذكاء ============
+@app.route("/api/images/<int:iid>/enhance", methods=["POST"])
+def api_enhance(iid):
+    img = store.get_image(iid)
+    if not img:
+        abort(404)
+    data = request.get_json(force=True, silent=True) or {}
+    level = (data.get("level") or "medium").strip()
+    if level not in generator.ENHANCE_LEVELS:
+        level = "medium"
+    store.update_image(iid, status="running")
+    threading.Thread(target=_do_enhance, args=(iid, level), daemon=True).start()
+    return jsonify(store.get_image(iid))
+
+
+# ============ مساعد البرومبت: وصف العميل → برومبت احترافي جاهز ============
+@app.route("/api/prompt-assist", methods=["POST"])
+def api_prompt_assist():
+    data = request.get_json(force=True, silent=True) or {}
+    brief = (data.get("brief") or "").strip()
+    if not brief:
+        return jsonify({"error": "اكتب وصفًا مختصرًا لطلب العميل أولًا"}), 400
+    prompt = generator.assist_prompt(brief, _text_key())
+    return jsonify({"prompt": prompt})
+
+
 def _do_edit(iid, custom_prompt, mask_name):
     img = store.get_image(iid)
     batch = store.get_batch(img["batch_id"])
     api_key = _model_key(batch["model"])
+    model = batch["model"]
     current = RESULT_DIR / img["result"] if img.get("result") else UPLOAD_DIR / img["original"]
     try:
         if custom_prompt:
-            edit_q = "low"  # التعديل تجربة سريعة → جودة سريعة
-            if mask_name:
-                mprompt = MASK_EDIT_INSTRUCTION.format(edit=custom_prompt)
-                if _is_gpt(batch["model"]):
-                    out = generator.generate_masked_openai(
-                        api_key, mprompt, current, UPLOAD_DIR / mask_name, quality=edit_q,
+            mask_path = (UPLOAD_DIR / mask_name) if mask_name else None
+
+            # محاولة تعديل واحدة (تُستدعى مع/بدون تصعيد وجودة أعلى عند إعادة المحاولة)
+            def _run(escalate, quality):
+                instr = _edit_instruction(custom_prompt, mask=bool(mask_name), escalate=escalate)
+                if mask_name:
+                    if _is_gpt(model):
+                        return generator.generate_masked_openai(
+                            api_key, instr, current, mask_path, quality=quality,
+                        )
+                    return generator.generate_region(
+                        model, api_key, instr, current, None, mask_path, current,
+                        aspect=batch.get("aspect"), quality=quality,
                     )
-                else:
-                    out = generator.generate_region(
-                        batch["model"], api_key, mprompt, current, None,
-                        UPLOAD_DIR / mask_name, current,
-                        aspect=batch.get("aspect"), quality=edit_q,
-                    )
-            else:
-                out = generator.generate(
-                    batch["model"], api_key, EDIT_INSTRUCTION.format(edit=custom_prompt),
-                    current, None, aspect=batch.get("aspect"), quality=edit_q,
+                return generator.generate(
+                    model, api_key, instr, current, None,
+                    aspect=batch.get("aspect"), quality=quality,
                 )
+
+            # يتحقق أن التعديل نُفِّذ فعلًا؛ يصعّد ويعيد المحاولة إن لم يتغيّر شيء
+            res = generator.edit_with_verify(_run, current, mask=mask_path)
+            if not res["changed"]:
+                store.update_image(
+                    iid, status="failed",
+                    error="لم يُنفَّذ التعديل بعد عدة محاولات — جرّب صياغة أوضح، "
+                          "أو حدّد المنطقة المطلوبة بدقّة بأداة التأشير.",
+                )
+                return
+            out = res["out"]
         else:
             reference = _ref_paths(batch.get("reference"))
             raw = batch.get("prompt")
@@ -535,6 +587,33 @@ def _do_edit(iid, custom_prompt, mask_name):
             )
             if batch.get("lock_subject"):
                 out = generator.lock_subject(UPLOAD_DIR / img["original"], out)
+        result_name = f"{uuid.uuid4().hex}.png"
+        (RESULT_DIR / result_name).write_bytes(out)
+        store.update_image(iid, status="done", result=result_name, error=None)
+    except Exception as e:  # noqa: BLE001
+        store.update_image(iid, status="failed", error=str(e)[:400])
+
+
+def _do_enhance(iid, level):
+    """تحسين جودة صورة بالذكاء (مستوى محدّد) مع الحفاظ التام على المنتج."""
+    img = store.get_image(iid)
+    batch = store.get_batch(img["batch_id"])
+    api_key = _model_key(batch["model"])
+    model = batch["model"]
+    current = RESULT_DIR / img["result"] if img.get("result") else UPLOAD_DIR / img["original"]
+    cfg = generator.ENHANCE_LEVELS.get(level, generator.ENHANCE_LEVELS["medium"])
+    base_prompt = generator.ENHANCE_INSTRUCTION.format(word=cfg["word"])
+    try:
+        def _run(escalate, quality):
+            p = (generator.ENHANCE_ESCALATE + base_prompt) if escalate else base_prompt
+            return generator.generate(
+                model, api_key, p, current, None,
+                aspect=batch.get("aspect"), quality=cfg["quality"],
+            )
+
+        # يتحقق أن التحسين أحدث فرقًا فعليًا؛ يصعّد مرة إن رجع بلا تغيير
+        res = generator.edit_with_verify(_run, current)
+        out = res["out"]
         result_name = f"{uuid.uuid4().hex}.png"
         (RESULT_DIR / result_name).write_bytes(out)
         store.update_image(iid, status="done", result=result_name, error=None)

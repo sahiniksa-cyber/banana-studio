@@ -88,6 +88,161 @@ function noKeyBanner() {
     افتح <a onclick="navigate('settings')">الإعدادات</a> وأدخل مفتاح GPT-Image أو Nano Banana.</div></div>`;
 }
 
+// ============================================================
+//  تكبير الصور (Zoom) — عجلة الماوس + سحب للتنقّل + نقر مزدوج + أزرار
+//  يُطبَّق على الإطار الداخلي (الصورة + طبقة القناع معًا) فيبقى التأشير دقيقًا.
+// ============================================================
+function attachZoom(frameEl, innerEl) {
+  if (!frameEl || !innerEl) return () => {};
+  if (frameEl._zoomWired) { frameEl._zoomReset(); return frameEl._zoomReset; }
+  frameEl._zoomWired = true;
+
+  let scale = 1, tx = 0, ty = 0;
+  const brushActive = () => !!frameEl.querySelector(".mask-canvas.active");
+  const apply = () => {
+    innerEl.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    frameEl.classList.toggle("zoomed", scale > 1 && !brushActive());
+  };
+  const clampPan = () => {
+    const r = frameEl.getBoundingClientRect();
+    const mx = (scale - 1) * r.width / 2, my = (scale - 1) * r.height / 2;
+    tx = Math.max(-mx, Math.min(mx, tx));
+    ty = Math.max(-my, Math.min(my, ty));
+  };
+  const zoomAt = (cx, cy, f) => {
+    const prev = scale;
+    scale = Math.max(1, Math.min(5, scale * f));
+    const k = scale / prev;
+    tx = cx - (cx - tx) * k;
+    ty = cy - (cy - ty) * k;
+    if (scale <= 1.001) { scale = 1; tx = 0; ty = 0; }
+    clampPan(); apply();
+  };
+
+  frameEl.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const r = frameEl.getBoundingClientRect();
+    zoomAt(e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2,
+           e.deltaY < 0 ? 1.15 : 1 / 1.15);
+  }, { passive: false });
+
+  frameEl.addEventListener("dblclick", (e) => {
+    const r = frameEl.getBoundingClientRect();
+    if (scale > 1) { scale = 1; tx = 0; ty = 0; apply(); }
+    else zoomAt(e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2, 2);
+  });
+
+  let drag = false, sx = 0, sy = 0;
+  frameEl.addEventListener("mousedown", (e) => {
+    if (scale <= 1 || brushActive()) return;  // السحب للتنقّل فقط عند التكبير وإطفاء الفرشاة
+    drag = true; sx = e.clientX - tx; sy = e.clientY - ty; e.preventDefault();
+  });
+  frameEl.addEventListener("mousemove", (e) => {
+    if (!drag) return;
+    tx = e.clientX - sx; ty = e.clientY - sy; clampPan(); apply();
+  });
+  const endDrag = () => { drag = false; };
+  frameEl.addEventListener("mouseup", endDrag);
+  frameEl.addEventListener("mouseleave", endDrag);
+
+  const ctrl = document.createElement("div");
+  ctrl.className = "zoom-ctrl";
+  ctrl.innerHTML = `<button type="button" title="تكبير">+</button>` +
+                   `<button type="button" title="تصغير">−</button>` +
+                   `<button type="button" title="إعادة الضبط">⟲</button>`;
+  const b = ctrl.querySelectorAll("button");
+  b[0].onclick = (e) => { e.stopPropagation(); zoomAt(0, 0, 1.3); };
+  b[1].onclick = (e) => { e.stopPropagation(); zoomAt(0, 0, 1 / 1.3); };
+  b[2].onclick = (e) => { e.stopPropagation(); scale = 1; tx = 0; ty = 0; apply(); };
+  frameEl.appendChild(ctrl);
+
+  frameEl._zoomReset = () => { scale = 1; tx = 0; ty = 0; apply(); };
+  return frameEl._zoomReset;
+}
+
+// يضع صورة داخل إطار قابل للتكبير (يعيد استخدام نفس الطبقة الداخلية لتفادي تكرار المستمعين)
+function setZoomImage(frameEl, src) {
+  if (!frameEl) return;
+  let inner = frameEl.querySelector(".zoom-inner");
+  if (!inner) {
+    frameEl.innerHTML = `<div class="zoom-inner"></div>`;
+    inner = frameEl.querySelector(".zoom-inner");
+  }
+  inner.innerHTML = `<img src="${src}" alt="">`;
+  attachZoom(frameEl, inner);
+}
+
+// ============================================================
+//  مساعد البرومبت — وصف طلب العميل → برومبت احترافي جاهز
+// ============================================================
+function assistBtn(targetId) {
+  return `<button type="button" class="btn assist sm" onclick="assistPrompt('${targetId}', this)">` +
+    `${icon("wand")}<span>ساعدني بالبرومبت</span></button>`;
+}
+async function assistPrompt(targetId, btn) {
+  const ta = document.getElementById(targetId);
+  if (!ta) return;
+  const brief = ta.value.trim();
+  if (!brief) {
+    ta.focus();
+    return toast("اكتب باختصار وش يبي العميل، وبنحوّله لبرومبت احترافي");
+  }
+  setLoading(btn, "يحضّر البرومبت…");
+  try {
+    const r = await api("/api/prompt-assist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ brief }),
+    });
+    ta.value = r.prompt;
+    toast("تم تحضير برومبت احترافي — راجعه وعدّله إن حبيت");
+  } catch (e) { toast(e.message); }
+  setBtn(btn, "wand", "ساعدني بالبرومبت");
+}
+
+// ============================================================
+//  تحسين الجودة بالذكاء (مستويات)
+// ============================================================
+const ENHANCE_LEVELS = [
+  { val: "light", label: "خفيف" },
+  { val: "medium", label: "متوسط" },
+  { val: "strong", label: "قوي" },
+];
+let enhLevel = "medium";
+function initEnhanceLevels() {
+  const el = document.getElementById("enh-level");
+  if (!el) return;
+  el.innerHTML = ENHANCE_LEVELS.map((o) =>
+    `<div class="pill${o.val === enhLevel ? " active" : ""}" data-val="${o.val}">${o.label}</div>`
+  ).join("");
+  el.querySelectorAll(".pill").forEach((p) => {
+    p.addEventListener("click", () => {
+      el.querySelectorAll(".pill").forEach((x) => x.classList.remove("active"));
+      p.classList.add("active");
+      enhLevel = p.dataset.val;
+    });
+  });
+}
+async function enhanceImage() {
+  const imageId = currentImageId;
+  if (!imageId) return;
+  closeModal();          // حرّر المستخدم فورًا
+  ensurePoll();
+  markCellRunning(imageId);
+  toast("بدأ تحسين الجودة في الخلفية…");
+  try {
+    await api(`/api/images/${imageId}/enhance`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ level: enhLevel }),
+    });
+    if (currentBatchId) renderBatchImages();
+  } catch (e) {
+    toast(e.message);
+    if (currentBatchId) renderBatchImages();
+  }
+}
+
 // ===== التنقّل =====
 document.querySelectorAll(".nav-item").forEach((btn) => {
   btn.addEventListener("click", () => navigate(btn.dataset.view));
@@ -331,7 +486,8 @@ function viewDesignMode() {
           ${lockToggle("d-lock")}
 
           <label>البرومبت</label>
-          <textarea id="d-prompt" placeholder="صف الشكل/الأسلوب المطلوب…"></textarea>
+          <textarea id="d-prompt" placeholder="اكتب وش يبي العميل (ولو باختصار)، وزر «ساعدني بالبرومبت» يحوّله لصياغة احترافية…"></textarea>
+          <div class="assist-bar">${assistBtn("d-prompt")}</div>
           <button class="btn" id="d-gen" onclick="designGenerate()">${icon("wand")}<span>ولّد التصميم</span></button>
         </div>
         <div>
@@ -404,8 +560,8 @@ async function designGenerate() {
     design.sampleName = r.sample_name;
     design.resultName = r.result_name;
     design.prompt = r.prompt;
-    document.getElementById("d-preview").innerHTML =
-      `<img src="/media/result/${r.result_name}?t=${Date.now()}" alt="">`;
+    setZoomImage(document.getElementById("d-preview"),
+                 `/media/result/${r.result_name}?t=${Date.now()}`);
     document.getElementById("d-actions").classList.remove("hidden");
   } catch (e) {
     toast(e.message);
@@ -486,6 +642,7 @@ async function viewReferenceMode() {
 
       <label>برومبت إضافي (اختياري) — تعليمات مع الأسلوب المرجعي</label>
       <textarea id="r-prompt" placeholder="مثال: خلفية بيضاء نظيفة، وتأكد ما فيه أي عيوب أو أخطاء في المنتج"></textarea>
+      <div class="assist-bar">${assistBtn("r-prompt")}</div>
 
       <label>صور المنتجات (20-50 صورة)</label>
       <div class="file-drop" id="r-drop">${icon("upload")}<span>اسحب صور المنتجات هنا أو اضغط للاختيار</span></div>
@@ -648,8 +805,8 @@ async function reuseBatch(bid) {
     const firstRef = String(b.reference).split(",")[0].trim();
     design.resultName = firstRef;
     design.prompt = b.prompt || "";
-    document.getElementById("d-preview").innerHTML =
-      `<img src="/media/ref/${firstRef}?t=${Date.now()}" alt="">`;
+    setZoomImage(document.getElementById("d-preview"),
+                 `/media/ref/${firstRef}?t=${Date.now()}`);
     document.getElementById("d-actions").classList.remove("hidden");
   }
   toast("عدّل الإعدادات أو البرومبت، ثم ولّد من جديد أو اعتمد");
@@ -756,6 +913,9 @@ async function openImage(iid) {
   resetBrush();
   setBtn(document.getElementById("regen-btn"), "refresh", "إعادة توليد");
   resultImg.onload = sizeMaskCanvas;
+  // تفعيل/إعادة ضبط التكبير للإطارين (الأصلية والنتيجة)
+  attachZoom(document.getElementById("original-frame"), document.getElementById("original-zoom"));
+  attachZoom(document.getElementById("result-frame"), document.getElementById("result-zoom"));
   document.getElementById("overlay").classList.add("open");
 }
 
@@ -955,6 +1115,7 @@ async function viewTemplates() {
       <div id="t-ref-prev"></div>
       <label>البرومبت</label>
       <textarea id="t-prompt" placeholder="صف الأسلوب المطلوب تطبيقه على كل الصور…"></textarea>
+      <div class="assist-bar">${assistBtn("t-prompt")}</div>
       <button class="btn" onclick="createTemplate()">${icon("save")}<span>حفظ القالب</span></button>
     </div>
     <div id="templates-list" class="grid-cards"></div>`;
@@ -1070,6 +1231,13 @@ function escapeHtml(s) {
 document.getElementById("overlay").addEventListener("click", (e) => {
   if (e.target.id === "overlay") closeModal();
 });
+
+// تهيئة عناصر نافذة التعديل الثابتة (زر مساعد البرومبت + مستويات التحسين)
+(function initModalExtras() {
+  const ma = document.getElementById("modal-assist");
+  if (ma) ma.innerHTML = assistBtn("modal-prompt");
+  initEnhanceLevels();
+})();
 
 // البداية
 refreshKeys().then(() => navigate("batches"));
